@@ -1,0 +1,17 @@
+[Unit]
+Description=LED Brightness Control Daemon
+Documentation=https://github.com/securitycopper/free-sleep
+After=enable-subsystems.service frank.service
+Requires=enable-subsystems.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 /home/dac/scripts/led_brightness_daemon.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

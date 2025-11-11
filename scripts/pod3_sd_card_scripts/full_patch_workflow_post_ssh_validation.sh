@@ -122,10 +122,66 @@ echo "Services That SHOULD Be Running"
 echo "=========================================="
 echo ""
 
-echo "=== opensleep-wifi Service ==="
+echo "=== free-sleep-wifi Service ==="
 echo "Purpose: Creates wlan0 interface by bypassing EEPROM WiFi check"
 echo "Status:"
-systemctl status opensleep-wifi --no-pager || echo "opensleep-wifi service not found"
+systemctl status free-sleep-wifi --no-pager || echo "free-sleep-wifi service not found"
+echo ""
+
+echo "=== populate-deviceinfo Service ==="
+echo "Purpose: Creates /deviceinfo/ files from MAC address (runs every boot - tmpfs)"
+echo "Status:"
+systemctl status populate-deviceinfo --no-pager || echo "populate-deviceinfo service not found"
+if [ -d /deviceinfo ]; then
+    echo "✓ /deviceinfo directory exists"
+    if [ -f /deviceinfo/device-id ]; then
+        echo "✓ device-id: $(cat /deviceinfo/device-id)"
+    else
+        echo "✗ /deviceinfo/device-id MISSING (frank.service will fail to start)"
+    fi
+else
+    echo "✗ /deviceinfo directory NOT FOUND (frank.service will fail to start)"
+fi
+echo ""
+
+echo "=== enable-subsystems Service ==="
+echo "Purpose: Initializes PCAL6416A GPIO expander for Pod hardware subsystems"
+echo "Status:"
+systemctl status enable-subsystems --no-pager || echo "enable-subsystems service not found"
+if command -v i2cget >/dev/null 2>&1; then
+    # Dynamically detect I2C bus (varies across Pod 3 devices)
+    I2C_BUS=""
+    for bus in 0 1 2 3; do
+        if sudo i2cdetect -y $bus 2>/dev/null | grep -q " 20 "; then
+            I2C_BUS=$bus
+            break
+        fi
+    done
+    
+    if [ -n "$I2C_BUS" ]; then
+        GPIO_STATUS=$(sudo i2cget -y $I2C_BUS 0x20 0x02 2>/dev/null || echo "error")
+        if [ "$GPIO_STATUS" = "0xfd" ] || [ "$GPIO_STATUS" = "0xFD" ]; then
+            echo "✓ GPIO expander enabled on I2C bus $I2C_BUS (register 0x02 = $GPIO_STATUS)"
+        else
+            echo "⚠ GPIO expander status on bus $I2C_BUS: $GPIO_STATUS (expected 0xFD)"
+        fi
+    else
+        echo "⚠ GPIO expander (0x20) not found on any I2C bus"
+    fi
+else
+    echo "ℹ i2c-tools not available, cannot verify GPIO expander"
+fi
+echo ""
+
+echo "=== frankenfirmware Service ==="
+echo "Purpose: Eight Sleep's firmware layer (sensor data processing)"
+echo "Status:"
+systemctl status frank --no-pager || echo "frank service not found"
+if [ -S /tmp/dac.sock ]; then
+    echo "✓ /tmp/dac.sock exists (frank is communicating)"
+else
+    echo "⚠ /tmp/dac.sock missing (frank may not be running properly)"
+fi
 echo ""
 
 echo "=== wpa_supplicant Service ==="
@@ -174,12 +230,19 @@ echo "Purpose: Eight Sleep's main control daemon (conflicts with FreeSleep)"
 echo "Expected: disabled/inactive/masked"
 echo "Status:"
 systemctl status capybara --no-pager || echo "capybara service status"
+if systemctl is-masked capybara >/dev/null 2>&1; then
+    echo "✓ capybara is MASKED (correct - prevents auto-start)"
+elif systemctl is-active capybara >/dev/null 2>&1; then
+    echo "✗ capybara is ACTIVE (will interfere with FreeSleep - should be masked)"
+else
+    echo "ℹ capybara is inactive but not masked"
+fi
 echo ""
 
 echo "=== Eight Sleep Services (Should be disabled) ==="
-echo "Expected: swupdate-progress, swupdate, defibrillator, eight-kernel, telegraf, vector, frankenfirmware, dac"
+echo "Expected: swupdate-progress, swupdate, defibrillator, eight-kernel, telegraf, vector"
 echo "Status:"
-for service in swupdate-progress swupdate defibrillator eight-kernel telegraf vector frankenfirmware dac swupdate.socket; do
+for service in swupdate-progress swupdate defibrillator eight-kernel telegraf vector swupdate.socket; do
     if systemctl is-active "$service" >/dev/null 2>&1; then
         echo "  ⚠ $service is ACTIVE (should be disabled)"
     elif systemctl is-masked "$service" >/dev/null 2>&1; then
@@ -191,12 +254,28 @@ done
 echo ""
 
 # === Verify Files ===
-echo "=== Check opensleep-wifi script exists ==="
-if [ -f /etc/wifi/opensleep-wifi ]; then
-    ls -la /etc/wifi/opensleep-wifi
-    echo "✓ opensleep-wifi script found"
+echo "=== Check free-sleep-wifi script exists ==="
+if [ -f /etc/wifi/free-sleep-wifi ]; then
+    ls -la /etc/wifi/free-sleep-wifi
+    echo "✓ free-sleep-wifi script found"
 else
-    echo "✗ opensleep-wifi script NOT found"
+    echo "✗ free-sleep-wifi script NOT found"
+fi
+echo ""
+
+echo "=== Check subsystem initialization scripts ==="
+if [ -f /usr/local/bin/populate_deviceinfo.sh ]; then
+    ls -la /usr/local/bin/populate_deviceinfo.sh
+    echo "✓ populate_deviceinfo.sh found"
+else
+    echo "✗ populate_deviceinfo.sh NOT found (deviceinfo will not be created)"
+fi
+
+if [ -f /usr/local/bin/enable_subsystems.sh ]; then
+    ls -la /usr/local/bin/enable_subsystems.sh
+    echo "✓ enable_subsystems.sh found"
+else
+    echo "✗ enable_subsystems.sh NOT found (GPIO expander will not be initialized)"
 fi
 echo ""
 
@@ -281,6 +360,12 @@ if [ -f /var/lib/freesleep-installed.flag ]; then
 else
     echo "  ✗ freesleep-installed.flag MISSING (FreeSleep not installed yet)"
 fi
+
+if [ -f /var/lib/freesleep-subsystems-fixed.flag ]; then
+    echo "  ✓ freesleep-subsystems-fixed.flag exists (free-sleep.service dependencies updated)"
+else
+    echo "  ⚠ freesleep-subsystems-fixed.flag MISSING (free-sleep.service may start too early)"
+fi
 echo ""
 
 echo "Boot Logs:"
@@ -349,12 +434,33 @@ fi
 echo ""
 
 # === Boot Order Verification ===
-echo "=== Service Dependencies (opensleep-wifi) ==="
-systemctl list-dependencies opensleep-wifi --no-pager | head -20
+echo "=== Service Dependencies (populate-deviceinfo - FIRST) ==="
+systemctl list-dependencies populate-deviceinfo --no-pager | head -20
+echo ""
+
+echo "=== Service Dependencies (enable-subsystems - SECOND) ==="
+systemctl list-dependencies enable-subsystems --no-pager | head -20
+echo ""
+
+echo "=== Service Dependencies (frank - THIRD) ==="
+systemctl list-dependencies frank --no-pager | head -20
+echo ""
+
+echo "=== Service Dependencies (free-sleep-wifi) ==="
+systemctl list-dependencies free-sleep-wifi --no-pager | head -20
 echo ""
 
 echo "=== Service Dependencies (ssh-early) ==="
 systemctl list-dependencies ssh-early --no-pager | head -20
+echo ""
+
+echo "=== frank.service Override Check ==="
+if [ -f /lib/systemd/system/frank.service.d/freesleep-subsystems.conf ]; then
+    echo "✓ frank.service override exists:"
+    cat /lib/systemd/system/frank.service.d/freesleep-subsystems.conf | sed 's/^/    /'
+else
+    echo "✗ frank.service override NOT FOUND (frank will not wait for subsystems)"
+fi
 echo ""
 
 # === Masked Services ===
@@ -370,6 +476,64 @@ echo "========================================"
 
 # Check critical items
 ERRORS=0
+
+# Check subsystem services
+if ! systemctl is-active populate-deviceinfo >/dev/null 2>&1; then
+    echo "✗ populate-deviceinfo service is not active"
+    ((ERRORS++))
+else
+    echo "✓ populate-deviceinfo service is active"
+fi
+
+if ! systemctl is-active enable-subsystems >/dev/null 2>&1; then
+    echo "✗ enable-subsystems service is not active"
+    ((ERRORS++))
+else
+    echo "✓ enable-subsystems service is active"
+fi
+
+if [ ! -d /deviceinfo ]; then
+    echo "✗ /deviceinfo directory does not exist"
+    ((ERRORS++))
+elif [ ! -f /deviceinfo/device-id ]; then
+    echo "✗ /deviceinfo/device-id missing (frank will fail)"
+    ((ERRORS++))
+else
+    echo "✓ /deviceinfo/device-id exists"
+fi
+
+# Check GPIO expander
+if command -v i2cget >/dev/null 2>&1; then
+    # Dynamically detect I2C bus (varies across Pod 3 devices)
+    I2C_BUS=""
+    for bus in 0 1 2 3; do
+        if sudo i2cdetect -y $bus 2>/dev/null | grep -q " 20 "; then
+            I2C_BUS=$bus
+            break
+        fi
+    done
+    
+    if [ -n "$I2C_BUS" ]; then
+        GPIO_STATUS=$(sudo i2cget -y $I2C_BUS 0x20 0x02 2>/dev/null || echo "error")
+        if [ "$GPIO_STATUS" = "0xfd" ] || [ "$GPIO_STATUS" = "0xFD" ]; then
+            echo "✓ GPIO expander is enabled on I2C bus $I2C_BUS"
+        else
+            echo "⚠ GPIO expander not properly initialized on bus $I2C_BUS (status: $GPIO_STATUS)"
+            ((ERRORS++))
+        fi
+    else
+        echo "⚠ GPIO expander (0x20) not found on any I2C bus"
+        ((ERRORS++))
+    fi
+fi
+
+# Check frankenfirmware
+if ! systemctl is-active frank >/dev/null 2>&1; then
+    echo "✗ frankenfirmware service is not active"
+    ((ERRORS++))
+else
+    echo "✓ frankenfirmware service is active"
+fi
 
 # Check for IP address using available tools
 HAS_IP=false
@@ -390,11 +554,11 @@ else
     echo "✓ wlan0 has an IP address"
 fi
 
-if ! systemctl is-active opensleep-wifi >/dev/null 2>&1; then
-    echo "✗ opensleep-wifi service is not active"
+if ! systemctl is-active free-sleep-wifi >/dev/null 2>&1; then
+    echo "✗ free-sleep-wifi service is not active"
     ((ERRORS++))
 else
-    echo "✓ opensleep-wifi service is active"
+    echo "✓ free-sleep-wifi service is active"
 fi
 
 if ! systemctl is-active wpa_supplicant@wlan0 >/dev/null 2>&1; then
@@ -430,6 +594,16 @@ if systemctl is-active variscite-wifi >/dev/null 2>&1; then
     ((ERRORS++))
 else
     echo "✓ variscite-wifi service is masked/inactive"
+fi
+
+# Check Capybara is masked
+if systemctl is-active capybara >/dev/null 2>&1; then
+    echo "⚠ capybara service is still active (should be masked)"
+    ((ERRORS++))
+elif systemctl is-masked capybara >/dev/null 2>&1; then
+    echo "✓ capybara service is masked"
+else
+    echo "ℹ capybara service is inactive but not masked"
 fi
 
 # Check FreeSleep service
@@ -475,18 +649,37 @@ fi
 
 echo ""
 echo "=== Eight Sleep Services Status ==="
-EIGHT_SLEEP_SERVICES="swupdate-progress swupdate defibrillator eight-kernel telegraf vector frankenfirmware dac swupdate.socket"
+EIGHT_SLEEP_SERVICES="swupdate-progress swupdate defibrillator eight-kernel telegraf vector swupdate.socket"
+EIGHT_SLEEP_ACTIVE=0
 for service in $EIGHT_SLEEP_SERVICES; do
     if systemctl is-active "$service" >/dev/null 2>&1; then
         echo "⚠ $service is still active (should be disabled)"
+        ((EIGHT_SLEEP_ACTIVE++))
     elif systemctl is-masked "$service" >/dev/null 2>&1; then
         echo "✓ $service is masked"
     elif systemctl is-enabled "$service" >/dev/null 2>&1; then
         echo "⚠ $service is enabled but not running"
+        ((EIGHT_SLEEP_ACTIVE++))
     else
         echo "✓ $service is disabled/inactive"
     fi
 done
+
+if [ $EIGHT_SLEEP_ACTIVE -gt 0 ]; then
+    echo "⚠ Found $EIGHT_SLEEP_ACTIVE Eight Sleep services still active/enabled"
+fi
+
+echo ""
+echo "=== Critical Boot Order Check ==="
+echo "Expected order: populate-deviceinfo → enable-subsystems → frank → free-sleep"
+echo ""
+echo "Checking service timestamps (should be in order):"
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl show -p ActiveEnterTimestamp populate-deviceinfo.service 2>/dev/null | sed 's/^/  /'
+    systemctl show -p ActiveEnterTimestamp enable-subsystems.service 2>/dev/null | sed 's/^/  /'
+    systemctl show -p ActiveEnterTimestamp frank.service 2>/dev/null | sed 's/^/  /'
+    systemctl show -p ActiveEnterTimestamp free-sleep.service 2>/dev/null | sed 's/^/  /'
+fi
 
 echo ""
 if [ $ERRORS -eq 0 ]; then
@@ -497,11 +690,21 @@ if [ $ERRORS -eq 0 ]; then
     echo "  - Access web interface: http://<POD_IP>:3000"
     echo "  - Check logs: journalctl -u free-sleep -f"
     echo "  - Enable biometrics: /home/dac/free-sleep/scripts/enable_biometrics.sh"
+    echo ""
+    echo "Boot sequence verified:"
+    echo "  1. populate-deviceinfo created /deviceinfo/ files"
+    echo "  2. enable-subsystems initialized GPIO expander"
+    echo "  3. frankenfirmware started and processing sensor data"
+    echo "  4. FreeSleep is controlling the Pod"
 else
     echo "✗✗✗ Found $ERRORS issue(s) ✗✗✗"
     echo "Review the output above for details."
     echo ""
     echo "Common troubleshooting:"
+    echo "  - Check subsystem services: systemctl status populate-deviceinfo enable-subsystems"
+    echo "  - Check /deviceinfo: ls -la /deviceinfo/"
+    echo "  - Check GPIO expander: for bus in 0 1 2 3; do i2cdetect -y \$bus | grep -q 20 && i2cget -y \$bus 0x20 0x02; done"
+    echo "  - Check frankenfirmware: journalctl -u frank"
     echo "  - Check installation logs: journalctl -u freesleep-installer"
     echo "  - Check FreeSleep logs: journalctl -u free-sleep"
     echo "  - Verify network: ping 8.8.8.8"

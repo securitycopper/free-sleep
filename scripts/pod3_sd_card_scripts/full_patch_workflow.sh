@@ -10,12 +10,6 @@ echo "⚠️  IMPORTANT: This script is for Pod 3 with SD card only!"
 echo "   - Does NOT work with Pod 1, 2, 4, or 5"
 echo "   - Does NOT work with Pod 3 without SD card (eMMC version)"
 echo ""
-echo "💡 After factory reset: SOLID PURPLE LED = Power cycle required"
-echo "   - Factory reset extracts modified filesystem"
-echo "   - Software reboot insufficient - must physically power cycle"
-echo "   - Unplug power, wait 5 seconds, plug back in"
-echo "   - LED turns off after power cycle, installation continues"
-echo ""
 echo "Note: This script requires sudo privileges for:"
 echo "  - Mounting disk images (losetup, mount)"
 echo "  - Extracting and modifying system files"
@@ -750,66 +744,66 @@ echo "    ✓ FreeSleep installer checks DNS before proceeding"
 # --- WiFi initialization service (must be created before MAC service can reference it) ---
 if [[ ! -z "$SSID" ]]; then
     
-    # --- Create opensleep-wifi service to initialize WiFi hardware ---
-    echo "[*] Creating opensleep-wifi service..."
+    # --- Create free-sleep-wifi service to initialize WiFi hardware ---
+    echo "[*] Creating free-sleep-wifi service..."
     
     # Check if variscite-wifi script exists on the mounted image
     if sudo test -f "$MOUNT_DIR/etc/wifi/variscite-wifi"; then
         # Create wifi directory in staging
         sudo mkdir -p "$STAGING_DIR/etc/wifi"
         
-        # Copy variscite-wifi script as opensleep-wifi
-        sudo cp "$MOUNT_DIR/etc/wifi/variscite-wifi" "$STAGING_DIR/etc/wifi/opensleep-wifi"
+        # Copy variscite-wifi script as free-sleep-wifi
+        sudo cp "$MOUNT_DIR/etc/wifi/variscite-wifi" "$STAGING_DIR/etc/wifi/free-sleep-wifi"
         
         # Bypass EEPROM check - modify wifi_is_available() function to always return 0
         # This is necessary because Pod 3's EEPROM reports WiFi as unavailable even though hardware is present
         sudo sed -i '/^wifi_is_available()/,/^}/{
             /opt=.*i2cget/,/fi$/c\
-    # OpenSleep: Bypass EEPROM check - WiFi hardware is physically present\
+    # FreeSleep: Bypass EEPROM check - WiFi hardware is physically present\
     # Eight Sleep EEPROM has WiFi bit unset but hardware exists\
     return 0
-        }' "$STAGING_DIR/etc/wifi/opensleep-wifi"
+        }' "$STAGING_DIR/etc/wifi/free-sleep-wifi"
         
         # Ensure script is executable
-        sudo chmod +x "$STAGING_DIR/etc/wifi/opensleep-wifi"
+        sudo chmod +x "$STAGING_DIR/etc/wifi/free-sleep-wifi"
         
-        # Create opensleep-wifi.service
+        # Create free-sleep-wifi.service
         sudo mkdir -p "$STAGING_DIR/etc/systemd/system"
-        OPENSLEEP_WIFI_SERVICE="$STAGING_DIR/etc/systemd/system/opensleep-wifi.service"
-        sudo bash -c "cat > '$OPENSLEEP_WIFI_SERVICE'" <<'EOF'
+        FREESLEEP_WIFI_SERVICE="$STAGING_DIR/etc/systemd/system/free-sleep-wifi.service"
+        sudo bash -c "cat > '$FREESLEEP_WIFI_SERVICE'" <<'EOF'
 [Unit]
-Description=OpenSleep WiFi Initialization Service
+Description=FreeSleep WiFi Initialization Service
 Before=network.target
 After=sysinit.target
-ConditionPathExists=/etc/wifi/opensleep-wifi
+ConditionPathExists=/etc/wifi/free-sleep-wifi
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/etc/wifi/opensleep-wifi start
-ExecStop=/etc/wifi/opensleep-wifi stop
+ExecStart=/etc/wifi/free-sleep-wifi start
+ExecStop=/etc/wifi/free-sleep-wifi stop
 
 [Install]
 WantedBy=network.target
 EOF
-        sudo chmod 644 "$OPENSLEEP_WIFI_SERVICE"
+        sudo chmod 644 "$FREESLEEP_WIFI_SERVICE"
         
-        # Enable opensleep-wifi.service (create symlink in network.target.wants)
+        # Enable free-sleep-wifi.service (create symlink in network.target.wants)
         sudo mkdir -p "$STAGING_DIR/etc/systemd/system/network.target.wants"
-        sudo ln -sf /etc/systemd/system/opensleep-wifi.service "$STAGING_DIR/etc/systemd/system/network.target.wants/opensleep-wifi.service"
+        sudo ln -sf /etc/systemd/system/free-sleep-wifi.service "$STAGING_DIR/etc/systemd/system/network.target.wants/free-sleep-wifi.service"
         
         # Mask variscite-wifi.service to prevent conflicts
         sudo ln -sf /dev/null "$STAGING_DIR/etc/systemd/system/variscite-wifi.service"
         
         # Note: Not copying to MOUNT_DIR - rootfs.tar.gz extraction during factory reset will install it
         # sudo mkdir -p "$MOUNT_DIR/etc/wifi"
-        # sudo cp "$STAGING_DIR/etc/wifi/opensleep-wifi" "$MOUNT_DIR/etc/wifi/"
-        # sudo cp "$OPENSLEEP_WIFI_SERVICE" "$MOUNT_DIR/etc/systemd/system/"
+        # sudo cp "$STAGING_DIR/etc/wifi/free-sleep-wifi" "$MOUNT_DIR/etc/wifi/"
+        # sudo cp "$FREESLEEP_WIFI_SERVICE" "$MOUNT_DIR/etc/systemd/system/"
         # sudo mkdir -p "$MOUNT_DIR/etc/systemd/system/network.target.wants"
-        # sudo ln -sf /etc/systemd/system/opensleep-wifi.service "$MOUNT_DIR/etc/systemd/system/network.target.wants/opensleep-wifi.service"
+        # sudo ln -sf /etc/systemd/system/free-sleep-wifi.service "$MOUNT_DIR/etc/systemd/system/network.target.wants/free-sleep-wifi.service"
         # sudo ln -sf /dev/null "$MOUNT_DIR/etc/systemd/system/variscite-wifi.service"
         
-        echo "[+] opensleep-wifi service created and enabled"
+        echo "[+] free-sleep-wifi service created and enabled"
         echo "    ✓ WiFi hardware will be initialized on boot"
         echo "    ✓ variscite-wifi.service masked (EEPROM check bypassed)"
     else
@@ -817,7 +811,7 @@ EOF
         echo "    WiFi may not work without manual hardware initialization"
     fi
     
-    # --- Configure persistent MAC address (requires opensleep-wifi service) ---
+    # --- Configure persistent MAC address (requires free-sleep-wifi service) ---
     if [[ ! -z "$MAC_ADDRESS" ]]; then
         echo "[*] Configuring persistent MAC address..."
         
@@ -828,13 +822,13 @@ EOF
         sudo mkdir -p "$SYSTEMD_DIR"
         
         # Create a service to set MAC address before networking starts
-        MAC_SERVICE="$SYSTEMD_DIR/opensleep-mac.service"
+        MAC_SERVICE="$SYSTEMD_DIR/free-sleep-mac.service"
         sudo bash -c "cat > '$MAC_SERVICE'" <<EOF
 [Unit]
-Description=OpenSleep Persistent MAC Address
+Description=FreeSleep Persistent MAC Address
 Before=network-pre.target wpa_supplicant@wlan0.service
 Wants=network-pre.target
-After=opensleep-wifi.service sys-subsystem-net-devices-wlan0.device
+After=free-sleep-wifi.service sys-subsystem-net-devices-wlan0.device
 BindsTo=sys-subsystem-net-devices-wlan0.device
 
 [Service]
@@ -852,12 +846,12 @@ EOF
         
         # Enable the service
         sudo mkdir -p "$SYSTEMD_DIR/network.target.wants"
-        sudo ln -sf ../opensleep-mac.service "$SYSTEMD_DIR/network.target.wants/opensleep-mac.service"
+        sudo ln -sf ../free-sleep-mac.service "$SYSTEMD_DIR/network.target.wants/free-sleep-mac.service"
         
         # Note: Not copying to MOUNT_DIR - rootfs.tar.gz extraction during factory reset will install it
         # sudo mkdir -p "$MOUNT_DIR/etc/systemd/system/network.target.wants"
         # sudo cp "$MAC_SERVICE" "$MOUNT_DIR/etc/systemd/system/"
-        # sudo ln -sf ../opensleep-mac.service "$MOUNT_DIR/etc/systemd/system/network.target.wants/opensleep-mac.service"
+        # sudo ln -sf ../free-sleep-mac.service "$MOUNT_DIR/etc/systemd/system/network.target.wants/free-sleep-mac.service"
         
         echo "[+] MAC address set to: $MAC_ADDRESS"
         echo "    MAC will persist across reboots and factory resets"
@@ -875,10 +869,10 @@ if [[ ! -z "$SSID" ]]; then
     sudo bash -c "cat > '$SSH_EARLY_SERVICE'" <<EOF
 [Unit]
 Description=Force-enable SSH early in boot
-After=network.target opensleep-wifi.service wpa_supplicant.service
+After=network.target free-sleep-wifi.service wpa_supplicant.service
 Before=capybara.service variscite-bt.service
 Wants=network-online.target
-Requires=opensleep-wifi.service
+Requires=free-sleep-wifi.service
 
 [Service]
 Type=oneshot
@@ -925,7 +919,7 @@ echo "[+] SSH early service installed and enabled."
 if [[ ! -z "$SSID" ]]; then
     echo "[*] Enabling wpa_supplicant@wlan0.service..."
     
-    # Create wpa_supplicant service override to wait for opensleep-wifi
+    # Create wpa_supplicant service override to wait for free-sleep-wifi
     WPA_OVERRIDE_DIR="$STAGING_DIR/etc/systemd/system/wpa_supplicant@wlan0.service.d"
     sudo mkdir -p "$WPA_OVERRIDE_DIR"
     
@@ -933,17 +927,17 @@ if [[ ! -z "$SSID" ]]; then
     if [[ ! -z "$MAC_ADDRESS" ]]; then
         sudo bash -c "cat > '$WPA_OVERRIDE_DIR/override.conf'" <<'EOF'
 [Unit]
-After=opensleep-wifi.service opensleep-mac.service
-Requires=opensleep-wifi.service opensleep-mac.service
+After=free-sleep-wifi.service free-sleep-mac.service
+Requires=free-sleep-wifi.service free-sleep-mac.service
 EOF
-        echo "    ✓ wpa_supplicant will wait for opensleep-wifi and opensleep-mac"
+        echo "    ✓ wpa_supplicant will wait for free-sleep-wifi and free-sleep-mac"
     else
         sudo bash -c "cat > '$WPA_OVERRIDE_DIR/override.conf'" <<'EOF'
 [Unit]
-After=opensleep-wifi.service
-Requires=opensleep-wifi.service
+After=free-sleep-wifi.service
+Requires=free-sleep-wifi.service
 EOF
-        echo "    ✓ wpa_supplicant will wait for opensleep-wifi"
+        echo "    ✓ wpa_supplicant will wait for free-sleep-wifi"
     fi
     
     sudo chmod 644 "$WPA_OVERRIDE_DIR/override.conf"
@@ -956,7 +950,7 @@ EOF
     # sudo cp "$WPA_OVERRIDE_DIR/override.conf" "$MOUNT_DIR/etc/systemd/system/wpa_supplicant@wlan0.service.d/"
     # sudo ln -sf /lib/systemd/system/wpa_supplicant@.service "$MOUNT_DIR/etc/systemd/system/multi-user.target.wants/wpa_supplicant@wlan0.service"
     
-    echo "[+] wpa_supplicant@wlan0.service enabled with opensleep-wifi dependency"
+    echo "[+] wpa_supplicant@wlan0.service enabled with free-sleep-wifi dependency"
 fi
 
 # --- Create service to disable Eight Sleep services ---
@@ -1017,8 +1011,8 @@ ExecStartPre=/bin/sh -c 'echo "Disabling Eight Sleep services at \$(date)" >> /v
 # Disable Eight Sleep services before FreeSleep installation
 # Service list matches INSTALLATION.md manual instructions
 # Use script to handle non-existent services gracefully (some services may not exist on all firmware versions)
-ExecStart=/bin/sh -c 'for svc in swupdate-progress swupdate defibrillator eight-kernel telegraf vector frankenfirmware dac swupdate.socket; do systemctl disable --now \$svc 2>&1 | tee -a /var/log/eightsleep-disabled.log || true; done'
-ExecStart=/bin/sh -c 'for svc in swupdate-progress swupdate defibrillator eight-kernel telegraf vector frankenfirmware dac swupdate.socket; do systemctl mask \$svc 2>&1 | tee -a /var/log/eightsleep-disabled.log || true; done'
+ExecStart=/bin/sh -c 'for svc in swupdate-progress swupdate defibrillator eight-kernel telegraf vector frankenfirmware dac capybara swupdate.socket; do systemctl disable --now \$svc 2>&1 | tee -a /var/log/eightsleep-disabled.log || true; done'
+ExecStart=/bin/sh -c 'for svc in swupdate-progress swupdate defibrillator eight-kernel telegraf vector frankenfirmware dac capybara swupdate.socket; do systemctl mask \$svc 2>&1 | tee -a /var/log/eightsleep-disabled.log || true; done'
 # Log completion
 ExecStartPost=/bin/sh -c 'echo "Eight Sleep services disabled successfully at \$(date)" >> /var/log/eightsleep-disabled.log'
 ExecStartPost=/bin/touch /var/lib/eightsleep-disabled.flag
@@ -1042,18 +1036,18 @@ fi
 
 # --- Install first-boot reboot service (runs before FreeSleep installer) ---
 if [[ "$FREESLEEP_INSTALL" = true ]]; then
-    echo "[*] Installing first-boot network initialization reboot..."
+    echo "[*] Installing first-boot automatic reboot..."
     
     FIRST_BOOT_SERVICE="$STAGING_DIR/etc/systemd/system/firstboot-reboot.service"
     sudo mkdir -p "$(dirname "$FIRST_BOOT_SERVICE")"
     
     sudo bash -c "cat > '$FIRST_BOOT_SERVICE'" <<'EOF'
 [Unit]
-Description=First Boot Power Cycle Prompt (Apply Factory Reset Changes)
+Description=First Boot Automatic Reboot (Apply Factory Reset Changes)
 # Run as early as possible after basic system services
 After=sysinit.target local-fs.target
 # Must run before network services start
-Before=network-pre.target network.target network-online.target ssh-early.service opensleep-wifi.service
+Before=network-pre.target network.target network-online.target ssh-early.service free-sleep-wifi.service
 Before=freesleep-installer.service disable-eightsleep-services.service
 DefaultDependencies=no
 ConditionPathExists=!/var/lib/firstboot-complete.flag
@@ -1062,19 +1056,12 @@ ConditionPathExists=!/var/lib/firstboot-complete.flag
 Type=oneshot
 # Create flag immediately to prevent running again
 ExecStart=/bin/touch /var/lib/firstboot-complete.flag
-# Log the power cycle prompt
-ExecStartPost=/bin/sh -c 'echo "Factory reset detected - first boot at $(date)" >> /var/log/firstboot.log'
-ExecStartPost=/bin/sh -c 'echo "Software reboot insufficient - user must power cycle" >> /var/log/firstboot.log'
-# Stop capybara service to prevent LED conflicts (will auto-restart on next boot)
-ExecStartPost=/bin/sh -c 'systemctl stop capybara.service || true'
-# Set LED to solid PURPLE to indicate power cycle needed
-# IS31FL3194 controller at 0x53, BRG color order: Blue=0x10, Red=0x11, Green=0x12
-# Purple = Red(255) + Blue(255) + Green(0)
-ExecStartPost=/bin/sh -c 'i2cset -y 1 0x53 0x4F 0xC5 && i2cset -y 1 0x53 0x01 0x01 && i2cset -y 1 0x53 0x02 0x07 && i2cset -y 1 0x53 0x03 0xAA && i2cset -y 1 0x53 0x10 0xFF && i2cset -y 1 0x53 0x11 0xFF && i2cset -y 1 0x53 0x12 0x00 && i2cset -y 1 0x53 0x40 0xC5'
-# Print message to console (visible via serial/minicom)
-ExecStartPost=/bin/sh -c 'echo "========================================" && echo "  FACTORY RESET COMPLETE" && echo "  LED SOLID PURPLE" && echo "  PLEASE POWER CYCLE THE DEVICE NOW" && echo "  (Unplug power, wait 5 seconds, plug back in)" && echo "========================================" && echo "Waiting for power cycle..." >> /var/log/firstboot.log'
-# Block here - system will stay running with red LED until user power cycles
-ExecStartPost=/bin/sh -c 'while true; do sleep 3600; done'
+# Log the reboot
+ExecStartPost=/bin/sh -c 'echo "Factory reset detected - triggering automatic reboot at $(date)" >> /var/log/firstboot.log'
+# Wait briefly to ensure flag is written to disk
+ExecStartPost=/bin/sleep 2
+# Trigger immediate reboot to apply factory reset changes
+ExecStartPost=/sbin/reboot
 RemainAfterExit=no
 StandardOutput=journal+console
 StandardError=journal+console
@@ -1094,10 +1081,9 @@ EOF
     # sudo mkdir -p "$MOUNT_DIR/etc/systemd/system/sysinit.target.wants"
     # sudo ln -sf ../firstboot-reboot.service "$MOUNT_DIR/etc/systemd/system/sysinit.target.wants/firstboot-reboot.service"
     
-    echo "[+] First-boot power cycle prompt installed"
-    echo "    ✓ Will show SOLID PURPLE LED after factory reset"
-    echo "    ✓ User must physically power cycle (unplug/replug power)"
-    echo "    ✓ FreeSleep installer runs after power cycle with applied changes"
+    echo "[+] First-boot automatic reboot installed"
+    echo "    ✓ Will automatically reboot after factory reset"
+    echo "    ✓ Applies filesystem changes before FreeSleep installation"
 fi
 
 # --- Install FreeSleep auto-installer ---
@@ -1258,6 +1244,268 @@ EOF
         echo "    ✓ Will set timezone after FreeSleep starts (third boot)"
         echo "    ✓ Timezone: $FREESLEEP_TIMEZONE"
     fi
+    
+    # --- Install subsystem initialization services (Pod 3 hardware support) ---
+    echo "[*] Installing Pod 3 subsystem initialization services..."
+    
+    # Create /usr/local/bin directory
+    sudo mkdir -p "$STAGING_DIR/usr/local/bin"
+    
+    # 1. Create populate_deviceinfo.sh script
+    POPULATE_DEVICEINFO_SCRIPT="$STAGING_DIR/usr/local/bin/populate_deviceinfo.sh"
+    sudo bash -c "cat > '$POPULATE_DEVICEINFO_SCRIPT'" <<'POPSCRIPT'
+#!/usr/bin/env bash
+# Populate /deviceinfo/ directory on boot (tmpfs - cleared on reboot)
+# This replaces Capybara's deviceinfo population function
+
+set -euo pipefail
+
+DEVICEINFO_DIR="/deviceinfo"
+mkdir -p "$DEVICEINFO_DIR"
+
+# Get MAC address (used to generate device-id)
+MAC=$(cat /sys/class/net/wlan0/address 2>/dev/null || echo "00:00:00:00:00:00")
+
+# Generate device-id from MAC address SHA1 hash (matches Capybara behavior)
+DEVICE_ID=$(echo -n "$MAC" | sha1sum | awk '{print $1}')
+
+# Create device files
+echo "$DEVICE_ID" > "$DEVICEINFO_DIR/device-id"
+echo "free-sleep-pod" > "$DEVICEINFO_DIR/device-label"
+echo "imx8mm-var" > "$DEVICEINFO_DIR/variscite-id"
+echo "$MAC" > "$DEVICEINFO_DIR/wifi-macaddress"
+
+# Create minimal dummy certificates (not used by FreeSleep)
+DUMMY_CERT="-----BEGIN CERTIFICATE-----
+MIIBkTCB+wIJAKHHCgVZU2T6MA0GCSqGSIb3DQEBCwUAMA0xCzAJBgNVBAYTAlVT
+MB4XDTE1MDEwMTAwMDAwMFoXDTI1MDEwMTAwMDAwMFowDTELMAkGA1UEBhMCVVMw
+XDANBgkqhkiG9w0BAQEFAANLADBIAkEAn2N7DF8L9MQhGBQ8e8LqMVV0UzE5X5qW
+-----END CERTIFICATE-----"
+
+echo "$DUMMY_CERT" > "$DEVICEINFO_DIR/device.crt"
+echo "$DUMMY_CERT" > "$DEVICEINFO_DIR/factory.crt"
+echo "$DUMMY_CERT" > "$DEVICEINFO_DIR/core.crt"
+echo "$DUMMY_CERT" > "$DEVICEINFO_DIR/root.crt"
+echo "$DUMMY_CERT" > "$DEVICEINFO_DIR/device.key"
+chmod 600 "$DEVICEINFO_DIR/device.key"
+
+# Set ownership
+chown -R root:root "$DEVICEINFO_DIR"
+chmod 644 "$DEVICEINFO_DIR"/*.crt "$DEVICEINFO_DIR"/device-* "$DEVICEINFO_DIR"/variscite-* "$DEVICEINFO_DIR"/wifi-*
+
+echo "✓ DeviceInfo populated (device-id: $DEVICE_ID)"
+POPSCRIPT
+    sudo chmod +x "$POPULATE_DEVICEINFO_SCRIPT"
+    
+    # 2. Create enable_subsystems.sh script
+    ENABLE_SUBSYSTEMS_SCRIPT="$STAGING_DIR/usr/local/bin/enable_subsystems.sh"
+    sudo bash -c "cat > '$ENABLE_SUBSYSTEMS_SCRIPT'" <<'ENASCRIPT'
+#!/usr/bin/env bash
+# Initialize PCAL6416A GPIO expander to enable Pod subsystems
+# This replaces Capybara's hardware initialization function
+
+set -euo pipefail
+
+echo "Enabling Pod subsystems via PCAL6416A GPIO expander..."
+
+# Detect which I2C bus has the GPIO expander at 0x20
+# Different Pod 3 devices may have the expander on different buses
+GPIO_ADDR=0x20
+I2C_BUS=""
+
+for bus in 0 1 2 3; do
+    if i2cdetect -y $bus 2>/dev/null | grep -q " 20 "; then
+        I2C_BUS=$bus
+        echo "Found GPIO expander on I2C bus $I2C_BUS"
+        break
+    fi
+done
+
+if [ -z "$I2C_BUS" ]; then
+    echo "ERROR: GPIO expander not found on any I2C bus"
+    exit 1
+fi
+
+# Configure Port 0 (register 0x06): Output configuration
+echo "Configuring Port 0..."
+i2cset -y $I2C_BUS $GPIO_ADDR 0x06 0xFC
+
+# Configure Port 1 (register 0x07): Output configuration  
+echo "Configuring Port 1..."
+i2cset -y $I2C_BUS $GPIO_ADDR 0x07 0x31
+
+# Assert reset (register 0x02): Enable subsystems
+echo "Asserting reset..."
+i2cset -y $I2C_BUS $GPIO_ADDR 0x02 0xFE
+
+# Enable subsystems (register 0x02): Final configuration
+echo "Enabling subsystems..."
+i2cset -y $I2C_BUS $GPIO_ADDR 0x02 0xFD
+
+# Initialize IS31FL3194 LED controller at address 0x53
+echo "Initializing LED controller..."
+LED_ADDR=0x53
+
+# Check if LED controller exists on the same bus
+if i2cdetect -y $I2C_BUS 2>/dev/null | grep -q " 53 "; then
+    echo "Found LED controller on I2C bus $I2C_BUS"
+    
+    # Reset and configure IS31FL3194
+    # Register 0x00: Shutdown register (0x01 = normal operation)
+    i2cset -y $I2C_BUS $LED_ADDR 0x00 0x01
+    
+    # Register 0x01: Configuration register
+    # Bit 0: Color mode (0=GRB, 1=RGB) - use 0 for GRB
+    # Bit 1-2: Current setting (00=max current)
+    i2cset -y $I2C_BUS $LED_ADDR 0x01 0x00
+    
+    # Register 0x03: Output 1 (Red/Green channel) - Start at default brightness
+    i2cset -y $I2C_BUS $LED_ADDR 0x03 0x64
+    
+    # Register 0x04: Output 2 (Green/Red channel) - Start at default brightness  
+    i2cset -y $I2C_BUS $LED_ADDR 0x04 0x64
+    
+    # Register 0x05: Output 3 (Blue channel) - Start at default brightness
+    i2cset -y $I2C_BUS $LED_ADDR 0x05 0x64
+    
+    # Register 0x07: Color update register - Apply changes
+    i2cset -y $I2C_BUS $LED_ADDR 0x07 0x00
+    
+    echo "✓ LED controller initialized on I2C bus $I2C_BUS"
+else
+    echo "⚠ LED controller not found at 0x53 on bus $I2C_BUS (continuing anyway)"
+fi
+
+echo "✓ Subsystems enabled successfully on I2C bus $I2C_BUS"
+ENASCRIPT
+    sudo chmod +x "$ENABLE_SUBSYSTEMS_SCRIPT"
+    
+    # 3. Create populate-deviceinfo.service
+    POPULATE_DEVICEINFO_SERVICE="$STAGING_DIR/etc/systemd/system/populate-deviceinfo.service"
+    sudo mkdir -p "$(dirname "$POPULATE_DEVICEINFO_SERVICE")"
+    sudo bash -c "cat > '$POPULATE_DEVICEINFO_SERVICE'" <<'EOF'
+[Unit]
+Description=Populate Device Info Directory for FreeSleep
+Documentation=https://github.com/throwaway31265/free-sleep
+# CRITICAL: Must run AFTER deviceinfo.mount to avoid race condition
+# Without this, deviceinfo.mount may remount tmpfs AFTER we populate it, clearing all files
+After=deviceinfo.mount
+Requires=deviceinfo.mount
+Before=frank.service free-sleep.service enable-subsystems.service
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/populate_deviceinfo.sh
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=sysinit.target
+EOF
+    sudo chmod 644 "$POPULATE_DEVICEINFO_SERVICE"
+    
+    # Enable populate-deviceinfo.service
+    SYSINIT_WANTS="$STAGING_DIR/etc/systemd/system/sysinit.target.wants"
+    sudo mkdir -p "$SYSINIT_WANTS"
+    sudo ln -sf ../populate-deviceinfo.service "$SYSINIT_WANTS/populate-deviceinfo.service"
+    
+    # 4. Create enable-subsystems.service
+    ENABLE_SUBSYSTEMS_SERVICE="$STAGING_DIR/etc/systemd/system/enable-subsystems.service"
+    sudo bash -c "cat > '$ENABLE_SUBSYSTEMS_SERVICE'" <<'EOF'
+[Unit]
+Description=Enable Pod Subsystems (PCAL6416A GPIO Expander)
+Documentation=https://www.nxp.com/docs/en/data-sheet/PCAL6416A.pdf
+Documentation=https://github.com/throwaway31265/free-sleep
+Before=frank.service free-sleep.service
+After=populate-deviceinfo.service
+Requires=populate-deviceinfo.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/enable_subsystems.sh
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    sudo chmod 644 "$ENABLE_SUBSYSTEMS_SERVICE"
+    
+    # Enable enable-subsystems.service
+    MULTI_USER_WANTS="$STAGING_DIR/etc/systemd/system/multi-user.target.wants"
+    sudo mkdir -p "$MULTI_USER_WANTS"
+    sudo ln -sf ../enable-subsystems.service "$MULTI_USER_WANTS/enable-subsystems.service"
+    
+    # 5. Modify frank.service to remove Capybara dependency
+    # Note: We create a drop-in override instead of modifying the original file
+    FRANK_OVERRIDE_DIR="$STAGING_DIR/lib/systemd/system/frank.service.d"
+    sudo mkdir -p "$FRANK_OVERRIDE_DIR"
+    FRANK_OVERRIDE="$FRANK_OVERRIDE_DIR/freesleep-subsystems.conf"
+    sudo bash -c "cat > '$FRANK_OVERRIDE'" <<'EOF'
+[Unit]
+# FreeSleep: Remove Capybara dependency (replaced by subsystem services)
+# Requires= is a list-type directive that cannot be cleared by drop-ins
+# This override adds new dependencies to work with FreeSleep
+After=enable-subsystems.service populate-deviceinfo.service
+
+[Install]
+# Ensure frank service starts after subsystems are initialized
+WantedBy=multi-user.target
+EOF
+    sudo chmod 644 "$FRANK_OVERRIDE"
+    
+    # 6. Create post-install service to modify free-sleep.service after installation
+    # This service will add dependency on enable-subsystems to free-sleep after it's installed
+    FREESLEEP_FIXER_SERVICE="$STAGING_DIR/etc/systemd/system/freesleep-service-fixer.service"
+    sudo bash -c "cat > '$FREESLEEP_FIXER_SERVICE'" <<'EOF'
+[Unit]
+Description=FreeSleep Service Dependency Fixer
+After=freesleep-installer.service
+ConditionPathExists=/var/lib/freesleep-installed.flag
+ConditionPathExists=!/var/lib/freesleep-service-fixed.flag
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c '\
+  if [ -f /etc/systemd/system/free-sleep.service ]; then \
+    echo "Adding subsystem dependency to free-sleep.service..."; \
+    if ! grep -q "After=.*enable-subsystems.service" /etc/systemd/system/free-sleep.service; then \
+      sed -i "/^After=/s/$/ enable-subsystems.service/" /etc/systemd/system/free-sleep.service; \
+      systemctl daemon-reload; \
+      echo "✓ free-sleep.service updated with subsystem dependency"; \
+    else \
+      echo "✓ free-sleep.service already has subsystem dependency"; \
+    fi; \
+  else \
+    echo "⚠ free-sleep.service not found, will retry on next boot"; \
+    exit 1; \
+  fi'
+ExecStartPost=/bin/touch /var/lib/freesleep-service-fixed.flag
+RemainAfterExit=yes
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    sudo chmod 644 "$FREESLEEP_FIXER_SERVICE"
+    
+    # Enable freesleep-service-fixer.service
+    sudo ln -sf ../freesleep-service-fixer.service "$MULTI_USER_WANTS/freesleep-service-fixer.service"
+    
+    # Note: Capybara service is masked by disable-eightsleep-services.service (runs after first boot)
+    # No need to mask it here in factory tar since it will be masked early in boot sequence
+    
+    echo "[+] Pod 3 subsystem initialization services installed"
+    echo "    ✓ populate-deviceinfo.service: Creates /deviceinfo/ files on boot"
+    echo "    ✓ enable-subsystems.service: Initializes PCAL6416A GPIO expander"
+    echo "    ✓ frank.service: Modified to work without Capybara"
+    echo "    ✓ freesleep-service-fixer.service: Adds dependency to free-sleep after install"
+    echo "    ✓ capybara.service: Masked by disable-eightsleep-services (runs after first boot)"
+    echo "    ✓ Boot order: populate-deviceinfo → enable-subsystems → frank → free-sleep"
 fi
 
 # --- Add validation script ---
@@ -1399,6 +1647,16 @@ if [[ "$FREESLEEP_INSTALL" = true ]]; then
             echo "    Biometrics: Enabled"
         fi
     fi
+    
+    # Verify subsystem initialization services
+    if sudo test -f "$STAGING_DIR/etc/systemd/system/populate-deviceinfo.service"; then
+        echo "  ✓ Pod 3 subsystem services configured"
+        echo "    - populate-deviceinfo.service (creates /deviceinfo/ files)"
+        echo "    - enable-subsystems.service (initializes PCAL6416A GPIO expander)"
+        echo "    - frank.service override (removed Capybara dependency)"
+        echo "    - freesleep-service-fixer.service (adds deps after install)"
+        echo "    - capybara.service masked"
+    fi
 fi
 
 if [[ ! -z "$VALIDATION_SCRIPT" ]]; then
@@ -1426,7 +1684,7 @@ if [[ ! -z "$SSID" ]]; then
     echo ""
     echo "WiFi Configuration:"
     echo "  - Network: $SSID"
-    echo "  - opensleep-wifi service will initialize WiFi hardware"
+    echo "  - free-sleep-wifi service will initialize WiFi hardware"
     echo "  - wpa_supplicant will connect automatically on boot"
     echo "  - variscite-wifi.service masked (EEPROM check bypassed)"
 fi
@@ -1435,7 +1693,7 @@ if [[ ! -z "$MAC_ADDRESS" ]]; then
     echo ""
     echo "MAC Address Configuration:"
     echo "  - Persistent MAC: $MAC_ADDRESS"
-    echo "  - Configured via systemd .link file"
+    echo "  - Configured via free-sleep-mac service"
     echo "  - Will NOT change on factory reset"
     echo "  - Survives reboots and system updates"
 fi
@@ -1465,7 +1723,7 @@ if [[ "$FREESLEEP_INSTALL" = true ]]; then
     else
         echo "  - ⚠️  Timezone defaults to UTC - set via web UI Settings for correct schedule times!"
     fi
-    echo "  - Eight Sleep services disabled on first boot (before installation)"
+    echo "  - Eight Sleep Capybara service disabled (replaced by subsystem services)"
     if [[ ! -z "$SSID" ]]; then
         echo "  - Device will remain reachable via WiFi: $SSID"
     fi
@@ -1475,10 +1733,17 @@ if [[ "$FREESLEEP_INSTALL" = true ]]; then
     echo "  1. First boot: Immediate reboot to apply rootfs changes (firstboot-reboot.service)"
     echo "  2. Second boot: Network init + Eight Sleep disabled → Automatic reboot"
     echo "  3. Third boot: FreeSleep installation (5-10 minutes) → Automatic reboot"  
-    echo "  4. Fourth boot: FreeSleep running, services configured"
+    echo "  4. Fourth boot: FreeSleep running, all services configured"
     if [[ -n "$FREESLEEP_TIMEZONE" ]]; then
         echo "                 Timezone automatically set on startup"
     fi
+    echo ""
+    echo "Hardware Initialization (on every boot):"
+    echo "  populate-deviceinfo → enable-subsystems → frank → free-sleep"
+    echo "  - populate-deviceinfo: Creates /deviceinfo/ files from MAC address"
+    echo "  - enable-subsystems: Initializes PCAL6416A GPIO expander"
+    echo "  - frank: Frankenfirmware connects to hardware"
+    echo "  - free-sleep: FreeSleep controls temperature via frankenfirmware"
     echo ""
     echo "During installation:"
     echo "  - Wait 20-25 minutes total for all reboots and installation"
