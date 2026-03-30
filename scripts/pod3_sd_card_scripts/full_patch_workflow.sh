@@ -19,24 +19,18 @@ echo ""
 # Default values
 IMG_FILE=""
 PUBKEY_FILE=""
-SSID=""
-PSK=""
-PASSWORD=""
 DISABLE_SERVICES=false
-REMOVE_EIGHTSLEEP_KEYS=false
 FREESLEEP_INSTALL=false
 FREESLEEP_REPO_USER="throwaway31265"
 FREESLEEP_BRANCH="main"
 FREESLEEP_BIOMETRICS=false
 FREESLEEP_TIMEZONE=""
+BUILD_PYTHON=false
 OUTPUT_FILE=""
 WORK_DIR_CUSTOM=""
 VALIDATION_SCRIPT=""
 MAC_ADDRESS=""
 TIME_SERVER=""
-STATIC_IP=""
-STATIC_GATEWAY=""
-STATIC_DNS=""
 
 # Valid timezone list (must match server/src/db/timeZones.ts)
 VALID_TIMEZONES=(
@@ -66,11 +60,19 @@ VALID_TIMEZONES=(
 # Parse command-line arguments
 usage() {
     cat <<EOF
-Usage: $0 -i IMAGE_FILE -k PUBKEY_FILE [-o OUTPUT_FILE] [-w WORK_DIR] [-s SSID] [-p PSK] [-P PASSWORD] [-m MAC_ADDRESS] [-t TIME_SERVER] [-I STATIC_IP] [-G GATEWAY] [-D DNS] [-R] [-d] [-f] [-U USER] [-F BRANCH] [-B] [-v VALIDATION_SCRIPT]
+Usage: $0 -i IMAGE_FILE -k PUBKEY_FILE [-o OUTPUT_FILE] [-w WORK_DIR] [-m MAC_ADDRESS] [-t TIME_SERVER] [-T TIMEZONE] [-f] [-U USER] [-F BRANCH] [-B] [-Y] [-v VALIDATION_SCRIPT]
 
 ⚠️  Pod 3 (SD Card Version) ONLY
    This script is designed for Eight Sleep Pod 3 with removable SD card.
    It does NOT work with Pod 1, 2, 4, 5, or Pod 3 eMMC (non-SD) versions.
+
+🔄 CAPYBARA-ASSISTED WORKFLOW
+   This workflow leverages Capybara for WiFi configuration:
+   - WiFi setup handled automatically via Eight Sleep app pairing
+   - No manual WiFi credentials needed in this script
+   - After pairing completes, system auto-transitions to FreeSleep
+   - Eight Sleep SSH keys preserved (required for Capybara pairing)
+   - Passwordless root access via SSH keys (no password needed)
 
 Required arguments:
   -i IMAGE_FILE    Path to the SD card image file
@@ -79,18 +81,9 @@ Required arguments:
 Optional arguments:
   -o OUTPUT_FILE   Path for the patched output image (default: <original>-patched.img)
   -w WORK_DIR      Custom working directory (must be empty, needs 16GB free space)
-  -s SSID          WiFi network SSID
-  -p PSK           WiFi network password/passphrase
-  -P PASSWORD      Password for the rewt user
   -m MAC_ADDRESS   Set persistent MAC address for wlan0 (format: AA:BB:CC:DD:EE:FF)
                    Prevents MAC from changing on factory reset
-  -I STATIC_IP     Configure static IP address (format: 192.168.1.100/24)
-                   If not provided, DHCP will be used
-  -G GATEWAY       Gateway IP address (required if using static IP)
-                   Example: 192.168.1.1
-  -D DNS           DNS server IP addresses (comma-separated)
-                   Example: "8.8.8.8,8.8.4.4" or "192.168.1.1"
-                   Required if using static IP
+                   Note: Optional - Capybara will configure WiFi connection
   -T TIMEZONE      Configure timezone for FreeSleep schedules (requires -f)
                    Valid values: UTC, America/New_York, America/Chicago, America/Denver,
                    America/Los_Angeles, America/Anchorage, Pacific/Honolulu, America/Sao_Paulo,
@@ -102,15 +95,10 @@ Optional arguments:
                    Note: If not set, timezone defaults to UTC. You can change it later in web UI.
   -t TIME_SERVER   Configure NTP time server (e.g., pool.ntp.org, time.google.com)
                    Configures systemd-timesyncd for automatic time synchronization
-  -R               [DISABLED] Remove Eight Sleep SSH keys (currently causes SSH connection failure)
-                   This feature is being debugged and will be re-enabled in a future update.
-  -d               Disable Eight Sleep services on first boot
-                   For safety, it waits for a wifi connection before disabling, this ensures the pairing and reset options are not interfered with.
-                   WARNING: This prevents normal Eight Sleep app pairing.
-                   To restore Eight Sleep functionality, you must reflash the original image.
-  -f               Enable FreeSleep auto-install on first boot
-                   FreeSleep will be installed automatically after network connection
+  -f               Enable FreeSleep auto-install after Capybara pairing
+                   FreeSleep will be installed automatically after Eight Sleep pairing completes
                    Installation script: https://raw.githubusercontent.com/throwaway31265/free-sleep/main/scripts/install.sh
+                   Workflow: Boot → Pair with Eight Sleep app → Auto-transition to FreeSleep
   -U USER          Specify GitHub user/org for FreeSleep fork (default: throwaway31265)
                    Useful for testing development forks
                    Example: -U myusername -F my-feature-branch
@@ -118,51 +106,65 @@ Optional arguments:
                    Examples: main, dev, pod3sd_script
   -B               Enable biometrics after FreeSleep installation
                    Runs: /home/dac/free-sleep/scripts/enable_biometrics.sh
+  -Y               Build Python 3.11 from source on first boot (required for biometrics)
+                   Compiles Python 3.11.7 targeting GLIBC 2.33 (30-60 min on first boot)
+                   Installs to /opt/python3.11/bin/python3.11
+                   Required if using -B flag due to system GLIBC 2.33 vs Python 3.9 GLIBC 2.38 incompatibility
   -v VALIDATION    Path to validation script to include in image (default: auto-detect in same directory)
   -h               Show this help message
 
 Example:
-  # Basic FreeSleep installation with WiFi
-  $0 -i sdcard.img -k ~/.ssh/id_rsa.pub -s "MyWiFi" -p "password123" -f -d
+  # Capybara-assisted FreeSleep installation (recommended)
+  $0 -i sdcard.img -k ~/.ssh/id_rsa.pub -f
   
-  # FreeSleep with specific branch and biometrics
-  $0 -i sdcard.img -k ~/.ssh/id_rsa.pub -s "MyWiFi" -p "pass" -f -F dev -B -d
+  # FreeSleep with specific branch and biometrics (requires Python build)
+  $0 -i sdcard.img -k ~/.ssh/id_rsa.pub -f -F dev -Y -B
   
   # FreeSleep from a development fork
-  $0 -i sdcard.img -k ~/.ssh/id_rsa.pub -s "MyWiFi" -p "pass" -f -U myusername -F my-feature -d
+  $0 -i sdcard.img -k ~/.ssh/id_rsa.pub -f -U myusername -F my-feature
   
   # FreeSleep with persistent MAC address and time server
-  $0 -i sdcard.img -k ~/.ssh/id_rsa.pub -s "MyWiFi" -p "pass" -f -m "02:11:22:33:44:55" -t "pool.ntp.org" -d
-  
-  # FreeSleep with static IP address
-  $0 -i sdcard.img -k ~/.ssh/id_rsa.pub -s "MyWiFi" -p "pass" -f -I "192.168.2.52/24" -G "192.168.2.1" -D "192.168.2.1,8.8.8.8" -d
+  $0 -i sdcard.img -k ~/.ssh/id_rsa.pub -f -m "02:11:22:33:44:55" -t "pool.ntp.org"
   
   # FreeSleep with timezone for correct schedule times
-  $0 -i sdcard.img -k ~/.ssh/id_rsa.pub -s "MyWiFi" -p "pass" -f -T "America/New_York" -d
+  $0 -i sdcard.img -k ~/.ssh/id_rsa.pub -f -T "America/New_York"
   
-  # Just SSH access, manual FreeSleep install later
-  $0 -i sdcard.img -k ~/.ssh/id_rsa.pub -s "MyWiFi" -p "pass"
+  # Just SSH access, manual setup later (minimal patching)
+  $0 -i sdcard.img -k ~/.ssh/id_rsa.pub
 EOF
     exit 1
 }
 
-while getopts "i:k:o:w:s:p:P:I:G:D:T:f:U:F:B:b:S:c:v:m:t:dRh" opt; do
+while getopts "i:k:o:w:p:P:I:G:D:T:f:U:F:B:Y:b:S:c:v:m:t:dRh" opt; do
     case $opt in
         i) IMG_FILE="$OPTARG" ;;
         k) PUBKEY_FILE="$OPTARG" ;;
         o) OUTPUT_FILE="$OPTARG" ;;
         w) WORK_DIR_CUSTOM="$OPTARG" ;;
-        s) SSID="$OPTARG" ;;
-        p) PSK="$OPTARG" ;;
-        P) PASSWORD="$OPTARG" ;;
-        I) STATIC_IP="$OPTARG" ;;
-        G) STATIC_GATEWAY="$OPTARG" ;;
-        D) STATIC_DNS="$OPTARG" ;;
         T) FREESLEEP_TIMEZONE="$OPTARG" ;;
         f) FREESLEEP_INSTALL=true ;;
         U) FREESLEEP_REPO_USER="$OPTARG" ;;
         F) FREESLEEP_BRANCH="$OPTARG" ;;
         B) FREESLEEP_BIOMETRICS=true ;;
+        Y) BUILD_PYTHON=true ;;
+        P) echo "WARNING: -P flag (password) is not supported in Capybara-assisted workflow."
+           echo "Passwordless root access via SSH keys is used instead."
+           ;;
+        I) echo "WARNING: -I flag (static IP) is deprecated in Capybara-assisted workflow."
+           echo "Network configuration is handled automatically via Eight Sleep app pairing."
+           ;;
+        G) echo "WARNING: -G flag (gateway) is deprecated in Capybara-assisted workflow."
+           echo "Network configuration is handled automatically via Eight Sleep app pairing."
+           ;;
+        D) echo "WARNING: -D flag (DNS) is deprecated in Capybara-assisted workflow."
+           echo "Network configuration is handled automatically via Eight Sleep app pairing."
+           ;;
+        s) echo "WARNING: -s flag (SSID) is deprecated in Capybara-assisted workflow."
+           echo "WiFi configuration is handled automatically via Eight Sleep app pairing."
+           ;;
+        p) echo "WARNING: -p flag (PSK) is deprecated in Capybara-assisted workflow."
+           echo "WiFi configuration is handled automatically via Eight Sleep app pairing."
+           ;;
         b) echo "WARNING: -b flag is deprecated. Use -f to enable FreeSleep auto-install."
            echo "The OpenSleep binary installation method is no longer supported."
            ;;
@@ -173,10 +175,12 @@ while getopts "i:k:o:w:s:p:P:I:G:D:T:f:U:F:B:b:S:c:v:m:t:dRh" opt; do
         v) VALIDATION_SCRIPT="$OPTARG" ;;
         m) MAC_ADDRESS="$OPTARG" ;;
         t) TIME_SERVER="$OPTARG" ;;
-        R) echo "ERROR: -R flag is temporarily disabled due to SSH connection issues"
-           echo "This feature is being debugged and will be re-enabled in a future update"
-           exit 1 ;;
-        d) DISABLE_SERVICES=true ;;
+        d) echo "WARNING: -d flag (disable services) is deprecated in Capybara-assisted workflow."
+           echo "Eight Sleep services remain active during pairing, then auto-disabled after transition."
+           DISABLE_SERVICES=false ;;
+        R) echo "WARNING: -R flag (remove SSH keys) is not supported in Capybara-assisted workflow."
+           echo "Eight Sleep SSH keys are required for Capybara pairing to function."
+           ;;
         h) usage ;;
         *) usage ;;
     esac
@@ -209,6 +213,24 @@ echo "  ✓ Public key file found: $PUBKEY_FILE"
 if [[ "$FREESLEEP_BIOMETRICS" == true ]] && [[ "$FREESLEEP_INSTALL" == false ]]; then
     echo "Error: -B (biometrics) requires -f (FreeSleep installation)"
     exit 1
+fi
+
+if [[ "$FREESLEEP_BIOMETRICS" == true ]] && [[ "$BUILD_PYTHON" == false ]]; then
+    echo ""
+    echo "⚠️  WARNING: Biometrics (-B) enabled without Python 3.11 build (-Y)"
+    echo ""
+    echo "The system has GLIBC 2.33 but Python 3.9 requires GLIBC 2.38."
+    echo "Biometrics installation will likely fail without Python 3.11."
+    echo ""
+    echo "Recommendation: Add -Y flag to build Python 3.11 from source"
+    echo "Example: $0 -i sdcard.img -k key.pub -f -Y -B"
+    echo ""
+    read -p "Continue anyway? (y/N): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Aborted."
+        exit 1
+    fi
 fi
 
 # Validate timezone if provided
@@ -447,112 +469,19 @@ else
     sudo touch "$AK_FILE"
 fi
 
-# Remove Eight Sleep keys if requested
-if [[ "$REMOVE_EIGHTSLEEP_KEYS" == true ]]; then
-    echo "[*] Removing Eight Sleep SSH keys..."
-    echo "[!] WARNING: This will prevent Eight Sleep mobile app pairing!"
-    echo "[!] Eight Sleep remote access will be disabled"
-    
-    # Create new authorized_keys with only the user's key
-    # Copy the user's public key
-    sudo cp "$PUBKEY_FILE" "$AK_FILE"
-    
-    # Ensure file ends with newline (SSH keys should end with newline)
-    sudo bash -c "echo '' >> '$AK_FILE'"
-    
-    echo "  ✓ Eight Sleep keys removed, only your key remains"
-else
-    # Append new public key to existing keys
-    sudo bash -c "cat '$PUBKEY_FILE' >> '$AK_FILE'"
-    echo "  ✓ Your key appended to existing keys"
-fi
+# Capybara-Assisted Workflow: Eight Sleep SSH keys are preserved
+# These keys are required for Capybara pairing to function properly
+# Only append the user's public key to existing authorized_keys
+echo "[*] Appending SSH key (Eight Sleep keys preserved for Capybara)..."
+sudo bash -c "cat '$PUBKEY_FILE' >> '$AK_FILE'"
+echo "  ✓ Your key appended to existing Eight Sleep keys"
 
 sudo chmod 600 "$AK_FILE"
 sudo chown "$REWT_UID:$REWT_GID" "$AK_FILE"
 
-# --- Set password if provided ---
-if [[ ! -z "$PASSWORD" ]]; then
-    echo "[*] Setting password for rewt..."
-    echo "[!] WARNING: Password modification is experimental and may cause SSH issues"
-    echo "[!] If SSH stops working, re-patch without -P flag"
-    
-    # Extract shadow and sshd_config files
-    if ! sudo tar -xf "$ROOTFS_TAR" -C "$STAGING_DIR" ./etc/shadow ./etc/ssh/sshd_config 2>/dev/null; then
-        echo "[-] WARNING: Failed to extract /etc/shadow or /etc/ssh/sshd_config from tar"
-        echo "[-] Skipping password modification to avoid breaking SSH"
-        echo "[-] You can still use SSH key authentication"
-    else
-        SHADOW_FILE="$STAGING_DIR/etc/shadow"
-        SSHD_CONFIG="$STAGING_DIR/etc/ssh/sshd_config"
-        
-        PASSWORD_SET=false
-        
-        if [[ -f "$SHADOW_FILE" ]]; then
-            # Get original permissions and ownership before modification
-            SHADOW_PERMS=$(sudo stat -c "%a" "$SHADOW_FILE")
-            SHADOW_OWNER=$(sudo stat -c "%u:%g" "$SHADOW_FILE")
-            
-            echo "  [*] Original shadow file: perms=$SHADOW_PERMS owner=$SHADOW_OWNER"
-            
-            # Validate file has content (check if rewt entry exists)
-            if ! sudo grep -q "^rewt:" "$SHADOW_FILE" 2>/dev/null; then
-                echo "[-] WARNING: /etc/shadow doesn't contain rewt entry, skipping password modification"
-                echo "[-] File may be empty or corrupted"
-            else
-                HASH=$(openssl passwd -6 "$PASSWORD")
-                sudo sed -i "s|^rewt:[^:]*:|rewt:$HASH:|" "$SHADOW_FILE"
-                
-                # Restore original permissions and ownership
-                sudo chmod "$SHADOW_PERMS" "$SHADOW_FILE"
-                sudo chown "$SHADOW_OWNER" "$SHADOW_FILE"
-                
-                # Also write to mounted partition for immediate use
-                sudo mkdir -p "$MOUNT_DIR/etc"
-                sudo cp "$SHADOW_FILE" "$MOUNT_DIR/etc/shadow"
-                sudo chmod "$SHADOW_PERMS" "$MOUNT_DIR/etc/shadow"
-                sudo chown "$SHADOW_OWNER" "$MOUNT_DIR/etc/shadow"
-                
-                PASSWORD_SET=true
-                echo "  ✓ Password set, permissions preserved"
-            fi
-        else
-            echo "[-] WARNING: /etc/shadow not found, skipping password modification"
-        fi
-        
-        if [[ -f "$SSHD_CONFIG" ]] && [[ "$PASSWORD_SET" = true ]]; then
-            # Get original permissions and ownership before modification
-            SSHD_PERMS=$(sudo stat -c "%a" "$SSHD_CONFIG")
-            SSHD_OWNER=$(sudo stat -c "%u:%g" "$SSHD_CONFIG")
-            
-            echo "  [*] Original sshd_config: perms=$SSHD_PERMS owner=$SSHD_OWNER"
-            
-            # Enable password authentication (handle both commented and uncommented lines)
-            sudo sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication yes/' "$SSHD_CONFIG"
-            
-            # Restore original permissions and ownership
-            sudo chmod "$SSHD_PERMS" "$SSHD_CONFIG"
-            sudo chown "$SSHD_OWNER" "$SSHD_CONFIG"
-            
-            # Also write to mounted partition for immediate use
-            sudo mkdir -p "$MOUNT_DIR/etc/ssh"
-            sudo cp "$SSHD_CONFIG" "$MOUNT_DIR/etc/ssh/sshd_config"
-            sudo chmod "$SSHD_PERMS" "$MOUNT_DIR/etc/ssh/sshd_config"
-            sudo chown "$SSHD_OWNER" "$MOUNT_DIR/etc/ssh/sshd_config"
-            
-            echo "  ✓ Password authentication enabled, permissions preserved"
-        elif [[ "$PASSWORD_SET" = false ]]; then
-            echo "[-] Skipping sshd_config modification (password not set)"
-        else
-            echo "[-] WARNING: /etc/ssh/sshd_config not found, skipping modification"
-        fi
-        
-        if [[ "$PASSWORD_SET" = false ]]; then
-            echo ""
-            echo "[!] Password was NOT set due to errors"
-            echo "[!] SSH key authentication will still work"
-        fi
-    fi
-fi
+# Capybara-Assisted Workflow: Passwordless root access via SSH keys
+# No password configuration needed - SSH key authentication is sufficient
+echo "  ✓ Passwordless root access configured via SSH keys"
 
 # --- Configure passwordless sudo for rewt user ---
 echo "[*] Configuring passwordless sudo for rewt user..."
@@ -571,140 +500,11 @@ sudo chmod 0440 "$REWT_SUDOERS"
 echo "  ✓ Passwordless sudo enabled for rewt user"
 echo "  ✓ Validation scripts can now run without password prompts"
 
-# --- Create wpa_supplicant WiFi configuration ---
-if [[ ! -z "$SSID" && ! -z "$PSK" ]]; then
-    echo "[*] Creating wpa_supplicant WiFi configuration..."
-    
-    # Create wpa_supplicant configuration directory
-    WPA_DIR="$STAGING_DIR/etc/wpa_supplicant"
-    sudo mkdir -p "$WPA_DIR"
-    
-    # Create wpa_supplicant configuration for wlan0
-    WPA_CONF="$WPA_DIR/wpa_supplicant-wlan0.conf"
-    sudo bash -c "cat > '$WPA_CONF'" <<EOF
-ctrl_interface=/var/run/wpa_supplicant
-ctrl_interface_group=0
-update_config=1
-
-network={
-    ssid="$SSID"
-    psk="$PSK"
-    key_mgmt=WPA-PSK
-    priority=100
-}
-EOF
-    sudo chmod 600 "$WPA_CONF"
-    sudo chown "$REWT_UID:$REWT_GID" "$WPA_CONF"
-    
-    # Create systemd-networkd configuration for wlan0
-    NETWORKD_DIR="$STAGING_DIR/etc/systemd/network"
-    sudo mkdir -p "$NETWORKD_DIR"
-    
-    NETWORKD_CONF="$NETWORKD_DIR/25-wlan0.network"
-    
-    # Check if static IP configuration is requested
-    if [[ ! -z "$STATIC_IP" ]]; then
-        echo "[*] Configuring static IP address: $STATIC_IP"
-        
-        # Validate that gateway and DNS are provided for static IP
-        if [[ -z "$STATIC_GATEWAY" ]] || [[ -z "$STATIC_DNS" ]]; then
-            echo "ERROR: Static IP requires both gateway (-G) and DNS (-D) to be specified"
-            cleanup
-            exit 1
-        fi
-        
-        # Convert comma-separated DNS to space-separated
-        DNS_SERVERS=$(echo "$STATIC_DNS" | tr ',' ' ')
-        
-        sudo bash -c "cat > '$NETWORKD_CONF'" <<EOF
-[Match]
-Name=wlan0
-
-[Network]
-Address=$STATIC_IP
-Gateway=$STATIC_GATEWAY
-DNS=$DNS_SERVERS
-DNSSEC=no
-
-[Route]
-Metric=100
-EOF
-        
-        # Remove any existing /etc/resolv.conf symlink and create static file
-        # Note: Factory Pod 3 images have resolv.conf as a symlink to NetworkManager
-        # which won't work since we're using systemd-networkd instead
-        RESOLV_CONF="$STAGING_DIR/etc/resolv.conf"
-        sudo rm -f "$RESOLV_CONF"
-        sudo bash -c "cat > '$RESOLV_CONF'" <<EOF
-# Static DNS configuration for FreeSleep
-# Created by full_patch_workflow.sh
-$(for dns in ${DNS_SERVERS}; do echo "nameserver $dns"; done)
-EOF
-        sudo chmod 644 "$RESOLV_CONF"
-        
-        echo "    ✓ Static IP: $STATIC_IP"
-        echo "    ✓ Gateway: $STATIC_GATEWAY"
-        echo "    ✓ DNS: $STATIC_DNS"
-    else
-        echo "[*] Configuring DHCP for dynamic IP address"
-        
-        sudo bash -c "cat > '$NETWORKD_CONF'" <<EOF
-[Match]
-Name=wlan0
-
-[Network]
-DHCP=yes
-DNSSEC=no
-
-[DHCP]
-RouteMetric=100
-UseDNS=yes
-EOF
-        
-        # Fix /etc/resolv.conf symlink for DHCP mode
-        # Factory images have resolv.conf pointing to NetworkManager, but we use systemd-networkd
-        # Point it to systemd-resolved's dynamic resolv.conf instead
-        RESOLV_CONF="$STAGING_DIR/etc/resolv.conf"
-        sudo rm -f "$RESOLV_CONF"
-        sudo ln -s /run/systemd/resolve/resolv.conf "$RESOLV_CONF"
-        
-        echo "    ✓ DHCP enabled with DNS from DHCP server"
-        echo "    ✓ /etc/resolv.conf symlinked to systemd-resolved"
-    fi
-    
-    sudo chmod 644 "$NETWORKD_CONF"
-    sudo chown "$REWT_UID:$REWT_GID" "$NETWORKD_CONF"
-    
-    # Note: Not copying to MOUNT_DIR - rootfs.tar.gz extraction during factory reset will install it
-    # sudo mkdir -p "$MOUNT_DIR/etc/wpa_supplicant"
-    # sudo mkdir -p "$MOUNT_DIR/etc/systemd/network"
-    # sudo cp "$WPA_CONF" "$MOUNT_DIR/etc/wpa_supplicant/"
-    # sudo cp "$NETWORKD_CONF" "$MOUNT_DIR/etc/systemd/network/"
-    
-    # Disable NetworkManager MAC randomization for wlan0
-    NM_CONF_DIR="$STAGING_DIR/etc/NetworkManager/conf.d"
-    sudo mkdir -p "$NM_CONF_DIR"
-    NM_CONF="$NM_CONF_DIR/99-disable-wifi-mac-randomization.conf"
-    sudo bash -c "cat > '$NM_CONF'" <<EOF
-[device-mac-randomization]
-# Disable MAC randomization for WiFi
-wifi.scan-rand-mac-address=no
-
-[connection-mac-randomization]
-# Use permanent MAC address
-ethernet.cloned-mac-address=permanent
-wifi.cloned-mac-address=permanent
-EOF
-    sudo chmod 644 "$NM_CONF"
-    sudo chown 0:0 "$NM_CONF"
-    
-    # Also write to mounted partition
-    sudo mkdir -p "$MOUNT_DIR/etc/NetworkManager/conf.d"
-    sudo cp "$NM_CONF" "$MOUNT_DIR/etc/NetworkManager/conf.d/"
-    
-    echo "[+] Created WiFi configuration for SSID: $SSID"
-    echo "    ✓ NetworkManager MAC randomization disabled"
-fi
+# --- WiFi Configuration Note ---
+echo "[*] WiFi Configuration:"
+echo "    ℹ️  WiFi setup is handled by Capybara during Eight Sleep app pairing"
+echo "    ℹ️  No manual wpa_supplicant configuration needed"
+echo "    ℹ️  After pairing, WiFi credentials will be captured for FreeSleep transition"
 
 # --- Configure NTP time server ---
 if [[ ! -z "$TIME_SERVER" ]]; then
@@ -734,129 +534,20 @@ EOF
 fi
 
 # --- DNS Configuration ---
-# Relying on DHCP to configure DNS via systemd-networkd or NetworkManager
-# The first-boot reboot gives the network stack time to properly configure DNS
-# If DHCP doesn't provide DNS, the DNS check in freesleep-installer will timeout
-echo "[*] DNS will be configured via DHCP"
-echo "    ✓ First-boot reboot ensures DNS is properly initialized"
-echo "    ✓ FreeSleep installer checks DNS before proceeding"
+# DNS will be configured by Capybara during Eight Sleep app pairing
+# The WiFi credentials obtained during pairing include network configuration
+echo "[*] DNS Configuration:"
+echo "    ℹ️  DNS configured automatically via Capybara WiFi setup"
+echo "    ℹ️  Network stack properly initialized during pairing process"
 
-# --- WiFi initialization service (must be created before MAC service can reference it) ---
-if [[ ! -z "$SSID" ]]; then
-    
-    # --- Create free-sleep-wifi service to initialize WiFi hardware ---
-    echo "[*] Creating free-sleep-wifi service..."
-    
-    # Check if variscite-wifi script exists on the mounted image
-    if sudo test -f "$MOUNT_DIR/etc/wifi/variscite-wifi"; then
-        # Create wifi directory in staging
-        sudo mkdir -p "$STAGING_DIR/etc/wifi"
-        
-        # Copy variscite-wifi script as free-sleep-wifi
-        sudo cp "$MOUNT_DIR/etc/wifi/variscite-wifi" "$STAGING_DIR/etc/wifi/free-sleep-wifi"
-        
-        # Bypass EEPROM check - modify wifi_is_available() function to always return 0
-        # This is necessary because Pod 3's EEPROM reports WiFi as unavailable even though hardware is present
-        sudo sed -i '/^wifi_is_available()/,/^}/{
-            /opt=.*i2cget/,/fi$/c\
-    # FreeSleep: Bypass EEPROM check - WiFi hardware is physically present\
-    # Eight Sleep EEPROM has WiFi bit unset but hardware exists\
-    return 0
-        }' "$STAGING_DIR/etc/wifi/free-sleep-wifi"
-        
-        # Ensure script is executable
-        sudo chmod +x "$STAGING_DIR/etc/wifi/free-sleep-wifi"
-        
-        # Create free-sleep-wifi.service
-        sudo mkdir -p "$STAGING_DIR/etc/systemd/system"
-        FREESLEEP_WIFI_SERVICE="$STAGING_DIR/etc/systemd/system/free-sleep-wifi.service"
-        sudo bash -c "cat > '$FREESLEEP_WIFI_SERVICE'" <<'EOF'
-[Unit]
-Description=FreeSleep WiFi Initialization Service
-Before=network.target
-After=sysinit.target
-ConditionPathExists=/etc/wifi/free-sleep-wifi
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/etc/wifi/free-sleep-wifi start
-ExecStop=/etc/wifi/free-sleep-wifi stop
-
-[Install]
-WantedBy=network.target
-EOF
-        sudo chmod 644 "$FREESLEEP_WIFI_SERVICE"
-        
-        # Enable free-sleep-wifi.service (create symlink in network.target.wants)
-        sudo mkdir -p "$STAGING_DIR/etc/systemd/system/network.target.wants"
-        sudo ln -sf /etc/systemd/system/free-sleep-wifi.service "$STAGING_DIR/etc/systemd/system/network.target.wants/free-sleep-wifi.service"
-        
-        # Mask variscite-wifi.service to prevent conflicts
-        sudo ln -sf /dev/null "$STAGING_DIR/etc/systemd/system/variscite-wifi.service"
-        
-        # Note: Not copying to MOUNT_DIR - rootfs.tar.gz extraction during factory reset will install it
-        # sudo mkdir -p "$MOUNT_DIR/etc/wifi"
-        # sudo cp "$STAGING_DIR/etc/wifi/free-sleep-wifi" "$MOUNT_DIR/etc/wifi/"
-        # sudo cp "$FREESLEEP_WIFI_SERVICE" "$MOUNT_DIR/etc/systemd/system/"
-        # sudo mkdir -p "$MOUNT_DIR/etc/systemd/system/network.target.wants"
-        # sudo ln -sf /etc/systemd/system/free-sleep-wifi.service "$MOUNT_DIR/etc/systemd/system/network.target.wants/free-sleep-wifi.service"
-        # sudo ln -sf /dev/null "$MOUNT_DIR/etc/systemd/system/variscite-wifi.service"
-        
-        echo "[+] free-sleep-wifi service created and enabled"
-        echo "    ✓ WiFi hardware will be initialized on boot"
-        echo "    ✓ variscite-wifi.service masked (EEPROM check bypassed)"
-    else
-        echo "[!] WARNING: /etc/wifi/variscite-wifi not found in image"
-        echo "    WiFi may not work without manual hardware initialization"
-    fi
-    
-    # --- Configure persistent MAC address (requires free-sleep-wifi service) ---
-    if [[ ! -z "$MAC_ADDRESS" ]]; then
-        echo "[*] Configuring persistent MAC address..."
-        
-        # brcmfmac WiFi driver generates random MAC at firmware load time
-        # .link files don't work reliably, so we use a service to set MAC after interface is up
-        
-        SYSTEMD_DIR="$STAGING_DIR/etc/systemd/system"
-        sudo mkdir -p "$SYSTEMD_DIR"
-        
-        # Create a service to set MAC address before networking starts
-        MAC_SERVICE="$SYSTEMD_DIR/free-sleep-mac.service"
-        sudo bash -c "cat > '$MAC_SERVICE'" <<EOF
-[Unit]
-Description=FreeSleep Persistent MAC Address
-Before=network-pre.target wpa_supplicant@wlan0.service
-Wants=network-pre.target
-After=free-sleep-wifi.service sys-subsystem-net-devices-wlan0.device
-BindsTo=sys-subsystem-net-devices-wlan0.device
-
-[Service]
-Type=oneshot
-ExecStart=/sbin/ip link set dev wlan0 down
-ExecStart=/sbin/ip link set dev wlan0 address $MAC_ADDRESS
-ExecStart=/sbin/ip link set dev wlan0 up
-RemainAfterExit=yes
-
-[Install]
-WantedBy=network.target
-EOF
-        sudo chmod 644 "$MAC_SERVICE"
-        sudo chown 0:0 "$MAC_SERVICE"
-        
-        # Enable the service
-        sudo mkdir -p "$SYSTEMD_DIR/network.target.wants"
-        sudo ln -sf ../free-sleep-mac.service "$SYSTEMD_DIR/network.target.wants/free-sleep-mac.service"
-        
-        # Note: Not copying to MOUNT_DIR - rootfs.tar.gz extraction during factory reset will install it
-        # sudo mkdir -p "$MOUNT_DIR/etc/systemd/system/network.target.wants"
-        # sudo cp "$MAC_SERVICE" "$MOUNT_DIR/etc/systemd/system/"
-        # sudo ln -sf ../free-sleep-mac.service "$MOUNT_DIR/etc/systemd/system/network.target.wants/free-sleep-mac.service"
-        
-        echo "[+] MAC address set to: $MAC_ADDRESS"
-        echo "    MAC will persist across reboots and factory resets"
-    fi
-fi
+# --- WiFi initialization handled by Capybara ---
+# Note: In Capybara-assisted workflow, WiFi hardware initialization and
+# configuration is handled by Eight Sleep's Capybara service during pairing.
+# No manual WiFi service setup is needed.
+echo "[*] WiFi Initialization:"
+echo "    ℹ️  WiFi hardware initialization handled by Capybara"
+echo "    ℹ️  No manual free-sleep-wifi service needed"
+echo "    ℹ️  Eight Sleep app will configure WiFi during pairing"
 
 # --- Enable SSH + Network Early Service ---
 echo "[*] Installing ssh-early.service..."
@@ -864,28 +555,9 @@ echo "[*] Installing ssh-early.service..."
 SSH_EARLY_SERVICE="$STAGING_DIR/etc/systemd/system/ssh-early.service"
 sudo mkdir -p "$(dirname "$SSH_EARLY_SERVICE")"
 
-if [[ ! -z "$SSID" ]]; then
-    # If WiFi is configured, wait for network and start SSH
-    sudo bash -c "cat > '$SSH_EARLY_SERVICE'" <<EOF
-[Unit]
-Description=Force-enable SSH early in boot
-After=network.target free-sleep-wifi.service wpa_supplicant.service
-Before=capybara.service variscite-bt.service
-Wants=network-online.target
-Requires=free-sleep-wifi.service
-
-[Service]
-Type=oneshot
-ExecStartPre=/bin/sleep 5
-ExecStart=/bin/systemctl start sshd.socket
-RemainAfterExit=yes
-
-[Install]
-WantedBy=multi-user.target
-EOF
-else
-    # No WiFi configured, just start SSH
-    sudo bash -c "cat > '$SSH_EARLY_SERVICE'" <<EOF
+# SSH starts early, before most services
+# Network will be configured by Capybara during Eight Sleep app pairing
+sudo bash -c "cat > '$SSH_EARLY_SERVICE'" <<EOF
 [Unit]
 Description=Force-enable SSH early in boot
 After=network-pre.target
@@ -899,7 +571,6 @@ RemainAfterExit=yes
 [Install]
 WantedBy=multi-user.target
 EOF
-fi
 
 sudo chmod 644 "$SSH_EARLY_SERVICE"
 
@@ -908,131 +579,87 @@ SYSTEMD_WANTS="$STAGING_DIR/etc/systemd/system/multi-user.target.wants"
 sudo mkdir -p "$SYSTEMD_WANTS"
 sudo ln -sf ../ssh-early.service "$SYSTEMD_WANTS/ssh-early.service"
 
-# Note: Not copying to MOUNT_DIR - rootfs.tar.gz extraction during factory reset will install it
-# sudo mkdir -p "$MOUNT_DIR/etc/systemd/system/multi-user.target.wants"
-# sudo cp "$SSH_EARLY_SERVICE" "$MOUNT_DIR/etc/systemd/system/"
-# sudo ln -sf ../ssh-early.service "$MOUNT_DIR/etc/systemd/system/multi-user.target.wants/ssh-early.service"
-
 echo "[+] SSH early service installed and enabled."
 
-# --- Enable wpa_supplicant for wlan0 interface ---
-if [[ ! -z "$SSID" ]]; then
-    echo "[*] Enabling wpa_supplicant@wlan0.service..."
-    
-    # Create wpa_supplicant service override to wait for free-sleep-wifi
-    WPA_OVERRIDE_DIR="$STAGING_DIR/etc/systemd/system/wpa_supplicant@wlan0.service.d"
-    sudo mkdir -p "$WPA_OVERRIDE_DIR"
-    
-    # Add MAC service dependency only if MAC address was configured
-    if [[ ! -z "$MAC_ADDRESS" ]]; then
-        sudo bash -c "cat > '$WPA_OVERRIDE_DIR/override.conf'" <<'EOF'
-[Unit]
-After=free-sleep-wifi.service free-sleep-mac.service
-Requires=free-sleep-wifi.service free-sleep-mac.service
-EOF
-        echo "    ✓ wpa_supplicant will wait for free-sleep-wifi and free-sleep-mac"
-    else
-        sudo bash -c "cat > '$WPA_OVERRIDE_DIR/override.conf'" <<'EOF'
-[Unit]
-After=free-sleep-wifi.service
-Requires=free-sleep-wifi.service
-EOF
-        echo "    ✓ wpa_supplicant will wait for free-sleep-wifi"
-    fi
-    
-    sudo chmod 644 "$WPA_OVERRIDE_DIR/override.conf"
-    
-    # Enable wpa_supplicant@wlan0.service
-    sudo ln -sf /lib/systemd/system/wpa_supplicant@.service "$SYSTEMD_WANTS/wpa_supplicant@wlan0.service"
-    
-    # Note: Not copying to MOUNT_DIR - rootfs.tar.gz extraction during factory reset will install it
-    # sudo mkdir -p "$MOUNT_DIR/etc/systemd/system/wpa_supplicant@wlan0.service.d"
-    # sudo cp "$WPA_OVERRIDE_DIR/override.conf" "$MOUNT_DIR/etc/systemd/system/wpa_supplicant@wlan0.service.d/"
-    # sudo ln -sf /lib/systemd/system/wpa_supplicant@.service "$MOUNT_DIR/etc/systemd/system/multi-user.target.wants/wpa_supplicant@wlan0.service"
-    
-    echo "[+] wpa_supplicant@wlan0.service enabled with free-sleep-wifi dependency"
-fi
+# --- Capybara-Assisted Workflow: No Eight Sleep Service Disabling ---
+# In the Capybara-assisted workflow, Eight Sleep services (including Capybara)
+# remain active during initial boot to allow pairing via the Eight Sleep app.
+# After pairing completes and magic_uuid is generated, the transition script
+# will automatically disable Eight Sleep services and enable FreeSleep.
+echo ""
+echo "ℹ️  Capybara-Assisted Workflow Active"
+echo "    • Eight Sleep services remain enabled for initial pairing"
+echo "    • Use Eight Sleep app to pair Pod and configure WiFi"
+echo "    • Update services disabled AFTER pairing completes"
+echo "    • System will auto-transition to FreeSleep after pairing"
+echo ""
 
-# --- Create service to disable Eight Sleep services ---
-# Auto-enable if FreeSleep is being installed
-if [[ "$DISABLE_SERVICES" = true ]] || [[ "$FREESLEEP_INSTALL" = true ]]; then
-    echo ""
-    echo "⚠️  WARNING: Disabling Eight Sleep services ⚠️"
-    echo "This will prevent the Eight Sleep app from pairing with the Pod."
-    
-    # Warn if FreeSleep is being installed without WiFi configuration
-    if [[ -z "$SSID" ]]; then
-        echo ""
-        echo "⚠️⚠️⚠️  CRITICAL WARNING  ⚠️⚠️⚠️"
-        echo "Installing FreeSleep without WiFi credentials!"
-        echo "  - Pod 3 has no Ethernet port"
-        echo "  - Without WiFi, the device will have NO network connectivity"
-        echo "  - The device will be UNREACHABLE without serial console access"
-        echo ""
-        echo "Recommendation: Provide WiFi credentials with -s and -p flags"
-        echo ""
-        read -p "Continue anyway? (yes/no): " -r
-        if [[ ! $REPLY =~ ^[Yy][Ee][Ss]$ ]]; then
-            echo "Aborting..."
-            cleanup
-            exit 1
-        fi
-    fi
-    
-    echo "This will prevent the Eight Sleep app from pairing with the Pod."
-    echo "To restore normal Eight Sleep functionality, you must reflash the original image."
-    echo ""
-    
-    echo "[*] Installing disable-eightsleep-services.service..."
+# --- Install pairing monitoring & transition service ---
+# This service waits for Capybara pairing to complete, then disables update services
+echo "[*] Installing pairing monitor and transition service..."
+PAIRING_MONITOR_SERVICE="$STAGING_DIR/etc/systemd/system/monitor-pairing.service"
+sudo mkdir -p "$(dirname "$PAIRING_MONITOR_SERVICE")"
 
-    DISABLE_SERVICE="$STAGING_DIR/etc/systemd/system/disable-eightsleep-services.service"
-    sudo mkdir -p "$(dirname "$DISABLE_SERVICE")"
-    
-    # CRITICAL: Disable Eight Sleep services IMMEDIATELY after first reboot
-    # Must run before swupdate/defibrillator detect changes and trigger unwanted reboots
-    # Running in basic.target (early boot) before network services start
-    sudo bash -c "cat > '$DISABLE_SERVICE'" <<EOF
+sudo bash -c "cat > '$PAIRING_MONITOR_SERVICE'" <<'EOF'
 [Unit]
-Description=Disable Eight Sleep services immediately after first boot
-# Run very early, right after filesystem and firstboot
-After=sysinit.target local-fs.target firstboot-reboot.service
-# Must run BEFORE Eight Sleep services can start
-Before=network.target network-online.target
-Before=swupdate.service swupdate-progress.service defibrillator.service capybara.service dac.service
-DefaultDependencies=no
-# Only run after first reboot (firstboot-complete exists) but not if already done
+Description=Monitor Capybara Pairing and Transition to FreeSleep
+After=network-online.target capybara.service
+Wants=network-online.target
+# Only run after first reboot, before FreeSleep is installed
 ConditionPathExists=/var/lib/firstboot-complete.flag
-ConditionPathExists=!/var/lib/eightsleep-disabled.flag
+ConditionPathExists=!/var/lib/pairing-complete.flag
 
 [Service]
 Type=oneshot
-# Log start
-ExecStartPre=/bin/sh -c 'echo "Disabling Eight Sleep services at \$(date)" >> /var/log/eightsleep-disabled.log'
-# Disable Eight Sleep services before FreeSleep installation
-# Service list matches INSTALLATION.md manual instructions
-# Use script to handle non-existent services gracefully (some services may not exist on all firmware versions)
-ExecStart=/bin/sh -c 'for svc in swupdate-progress swupdate defibrillator eight-kernel telegraf vector frankenfirmware dac capybara swupdate.socket; do systemctl disable --now \$svc 2>&1 | tee -a /var/log/eightsleep-disabled.log || true; done'
-ExecStart=/bin/sh -c 'for svc in swupdate-progress swupdate defibrillator eight-kernel telegraf vector frankenfirmware dac capybara swupdate.socket; do systemctl mask \$svc 2>&1 | tee -a /var/log/eightsleep-disabled.log || true; done'
-# Log completion
-ExecStartPost=/bin/sh -c 'echo "Eight Sleep services disabled successfully at \$(date)" >> /var/log/eightsleep-disabled.log'
-ExecStartPost=/bin/touch /var/lib/eightsleep-disabled.flag
-RemainAfterExit=yes
-StandardOutput=journal+console
-StandardError=journal+console
+RemainAfterExit=no
+# Wait for customer-wifi.nmconnection AND working internet connectivity
+# Then wait additional 2 minutes for Eight Sleep app to complete all setup tasks
+ExecStart=/bin/sh -c '\
+  echo "Waiting for WiFi configuration..." | systemd-cat -t pairing-monitor; \
+  for i in $(seq 1 600); do \
+    if [ -f /etc/NetworkManager/system-connections/customer-wifi.nmconnection ]; then \
+      echo "WiFi configured! Waiting for network connectivity..." | systemd-cat -t pairing-monitor; \
+      for j in $(seq 1 60); do \
+        if ping -c 1 8.8.8.8 >/dev/null 2>&1; then \
+          echo "Network connected! Waiting 2 minutes for Eight Sleep app to complete setup..." | systemd-cat -t pairing-monitor; \
+          sleep 120; \
+          echo "Setup grace period complete. Disabling update services..." | systemd-cat -t pairing-monitor; \
+          for svc in swupdate-progress swupdate defibrillator swupdate.socket; do \
+            systemctl disable --now $svc 2>&1 | systemd-cat -t pairing-monitor || true; \
+            systemctl mask $svc 2>&1 | systemd-cat -t pairing-monitor || true; \
+          done; \
+          echo "Update services disabled" | systemd-cat -t pairing-monitor; \
+          touch /var/lib/pairing-complete.flag; \
+          echo "Pairing complete, system ready for FreeSleep installation" | systemd-cat -t pairing-monitor; \
+          exit 0; \
+        fi; \
+        sleep 2; \
+      done; \
+      echo "Timeout waiting for network connectivity" | systemd-cat -t pairing-monitor; \
+      exit 1; \
+    fi; \
+    sleep 2; \
+  done; \
+  echo "Timeout waiting for WiFi configuration (20 minutes)" | systemd-cat -t pairing-monitor; \
+  exit 1'
 
 [Install]
-WantedBy=basic.target
+WantedBy=multi-user.target
 EOF
 
-    sudo chmod 644 "$DISABLE_SERVICE"
-    # Enable in basic.target for early execution (before network and Eight Sleep services)
-    BASIC_TARGET_WANTS="$STAGING_DIR/etc/systemd/system/basic.target.wants"
-    sudo mkdir -p "$BASIC_TARGET_WANTS"
-    sudo ln -sf ../disable-eightsleep-services.service "$BASIC_TARGET_WANTS/disable-eightsleep-services.service"
+sudo chmod 644 "$PAIRING_MONITOR_SERVICE"
+# Enable the service
+MULTI_USER_WANTS="$STAGING_DIR/etc/systemd/system/multi-user.target.wants"
+sudo mkdir -p "$MULTI_USER_WANTS"
+sudo ln -sf ../monitor-pairing.service "$MULTI_USER_WANTS/monitor-pairing.service"
 
-    echo "[+] Service to disable Eight Sleep services installed (runs IMMEDIATELY after first boot)."
-    echo "    ✓ Will run in basic.target before network and Eight Sleep services"
-fi
+echo "[+] Pairing monitor service installed"
+echo "    ✓ Waits for /etc/NetworkManager/system-connections/customer-wifi.nmconnection"
+echo "    ✓ Then waits for working internet connectivity (ping 8.8.8.8)"
+echo "    ✓ Then waits 2 minutes for Eight Sleep app to complete setup"
+echo "    ✓ Disables update services AFTER setup grace period"
+echo "    ✓ Creates /var/lib/pairing-complete.flag"
+echo "    ✓ Preserves Eight Sleep functionality during pairing"
 
 # --- Install first-boot reboot service (runs before FreeSleep installer) ---
 if [[ "$FREESLEEP_INSTALL" = true ]]; then
@@ -1086,28 +713,84 @@ EOF
     echo "    ✓ Applies filesystem changes before FreeSleep installation"
 fi
 
+# --- Install Python 3.11 builder (if requested) ---
+if [[ "$BUILD_PYTHON" = true ]]; then
+    echo "[*] Installing Python 3.11 builder..."
+    echo "  ℹ️  Python 3.11 Build Configuration"
+    echo "  • System has GLIBC 2.33 but Python 3.9.9 requires GLIBC 2.38"
+    echo "  • Will build Python 3.11.7 from source on first boot (30-60 minutes)"
+    echo "  • Builds after monitor-pairing.service (Eight Sleep updates stopped)"
+    echo "  • Installs to /opt/python3.11/ for biometrics compatibility"
+    echo ""
+    
+    # Create Python builder service
+    PYTHON_BUILDER_SERVICE="$STAGING_DIR/etc/systemd/system/python-builder.service"
+    sudo mkdir -p "$(dirname "$PYTHON_BUILDER_SERVICE")"
+    
+    sudo bash -c "cat > '$PYTHON_BUILDER_SERVICE'" <<'EOF'
+[Unit]
+Description=Python 3.11 Source Builder (For Biometrics GLIBC 2.33 Compatibility)
+After=network-online.target monitor-pairing.service
+Wants=network-online.target
+# CRITICAL: Must run after monitor-pairing completes (Eight Sleep updates stopped)
+ConditionPathExists=/var/lib/pairing-complete.flag
+ConditionPathExists=!/opt/python3.11/bin/python3.11
+ConditionPathExists=!/var/lib/python-build-complete.flag
+
+[Service]
+Type=oneshot
+# Wait for DNS to be working
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 120); do nslookup www.python.org >/dev/null 2>&1 && break || sleep 1; done'
+# Install build dependencies
+ExecStartPre=/bin/sh -c 'echo "Installing build dependencies..." && apt update && apt install -y build-essential libssl-dev zlib1g-dev libncurses5-dev libreadline-dev libsqlite3-dev libgdbm-dev libbz2-dev libexpat1-dev liblzma-dev libffi-dev wget'
+# Download Python 3.11.7 source
+ExecStartPre=/bin/sh -c 'mkdir -p /tmp/python-build && cd /tmp/python-build && wget -q --show-progress https://www.python.org/ftp/python/3.11.7/Python-3.11.7.tgz && tar -xzf Python-3.11.7.tgz'
+# Configure for GLIBC 2.33 compatibility
+ExecStartPre=/bin/sh -c 'cd /tmp/python-build/Python-3.11.7 && ./configure --prefix=/opt/python3.11 --enable-optimizations --with-ensurepip=install'
+# Build Python (this takes 30-60 minutes)
+ExecStart=/bin/sh -c 'cd /tmp/python-build/Python-3.11.7 && make -j$(nproc) && make altinstall'
+# Verify installation
+ExecStartPost=/bin/sh -c '/opt/python3.11/bin/python3.11 --version && /opt/python3.11/bin/python3.11 -c "import ssl, sqlite3, zlib" && echo "Python 3.11 build successful"'
+# Mark build complete
+ExecStartPost=/bin/touch /var/lib/python-build-complete.flag
+# Clean up build files
+ExecStartPost=/bin/rm -rf /tmp/python-build
+# Log completion
+ExecStartPost=/bin/sh -c 'echo "Python 3.11 build completed at $(date)" >> /var/log/python-build.log'
+RemainAfterExit=yes
+StandardOutput=journal+console
+StandardError=journal+console
+TimeoutStartSec=7200
+
+[Install]
+WantedBy=network-online.target
+EOF
+
+    sudo chmod 644 "$PYTHON_BUILDER_SERVICE"
+    
+    # Enable the service in network-online.target
+    NETWORK_ONLINE_WANTS="$STAGING_DIR/etc/systemd/system/network-online.target.wants"
+    sudo mkdir -p "$NETWORK_ONLINE_WANTS"
+    sudo ln -sf ../python-builder.service "$NETWORK_ONLINE_WANTS/python-builder.service"
+    
+    echo "[+] Python 3.11 builder configured"
+    echo "    ✓ Runs after pairing-complete.flag (monitor-pairing service complete)"
+    echo "    ✓ Downloads Python 3.11.7 source from python.org"
+    echo "    ✓ Builds with --enable-optimizations targeting GLIBC 2.33"
+    echo "    ✓ Installs to /opt/python3.11/bin/python3.11"
+    echo "    ⏱️  Build time: 30-60 minutes on first boot"
+    echo "    ⚠️  FreeSleep installer will wait for python-build-complete.flag"
+fi
+
 # --- Install FreeSleep auto-installer ---
 if [[ "$FREESLEEP_INSTALL" = true ]]; then
     echo "[*] Installing FreeSleep auto-installer..."
     
-    if [[ -z "$SSID" ]]; then
-        echo ""
-        echo "⚠️⚠️⚠️  CRITICAL WARNING  ⚠️⚠️⚠️"
-        echo "FreeSleep installation requires network connectivity!"
-        echo "  - Installation script downloads from GitHub"
-        echo "  - Pod 3 has no Ethernet port"
-        echo "  - Without WiFi, installation will fail"
-        echo ""
-        echo "Recommendation: Provide WiFi credentials with -s and -p flags"
-        echo ""
-        read -p "Continue anyway? (yes/no): " -r
-        if [[ ! $REPLY =~ ^[Yy][Ee][Ss]$ ]]; then
-            echo "Aborting..."
-            cleanup
-            exit 1
-        fi
-    fi
-    
+    echo "  ℹ️  Capybara-Assisted Installation Workflow"
+    echo "  • Network connectivity provided by Capybara during Eight Sleep app pairing"
+    echo "  • FreeSleep will install automatically after pairing completes"
+    echo "  • No manual WiFi configuration required"
+    echo ""
     echo "  Using branch: $FREESLEEP_BRANCH"
     echo "  Using repository: https://github.com/$FREESLEEP_REPO_USER/free-sleep"
     if [[ "$FREESLEEP_BIOMETRICS" = true ]]; then
@@ -1118,12 +801,23 @@ if [[ "$FREESLEEP_INSTALL" = true ]]; then
     FREESLEEP_INSTALLER_SERVICE="$STAGING_DIR/etc/systemd/system/freesleep-installer.service"
     sudo mkdir -p "$(dirname "$FREESLEEP_INSTALLER_SERVICE")"
     
+    # Determine if we need to wait for Python build
+    PYTHON_CONDITION=""
+    PYTHON_AFTER=""
+    if [[ "$BUILD_PYTHON" = true ]]; then
+        PYTHON_CONDITION="ConditionPathExists=/var/lib/python-build-complete.flag"
+        PYTHON_AFTER="python-builder.service"
+    fi
+    
     sudo bash -c "cat > '$FREESLEEP_INSTALLER_SERVICE'" <<'EOF'
 [Unit]
-Description=FreeSleep Auto-Installer (Second Boot)
-After=network-online.target ssh-early.service firstboot-reboot.service
+Description=FreeSleep Auto-Installer (After Capybara Pairing)
+After=network-online.target ssh-early.service firstboot-reboot.service monitor-pairing.service PYTHON_AFTER_PLACEHOLDER
 Wants=network-online.target
+# CRITICAL: Wait for pairing to complete before installing FreeSleep
 ConditionPathExists=/var/lib/firstboot-complete.flag
+ConditionPathExists=/var/lib/pairing-complete.flag
+PYTHON_CONDITION_PLACEHOLDER
 ConditionPathExists=!/var/lib/freesleep-installed.flag
 
 [Service]
@@ -1154,6 +848,15 @@ EOF
     sudo sed -i "s|USER_PLACEHOLDER|$FREESLEEP_REPO_USER|g" "$FREESLEEP_INSTALLER_SERVICE"
     sudo sed -i "s|BRANCH_PLACEHOLDER|$FREESLEEP_BRANCH|g" "$FREESLEEP_INSTALLER_SERVICE"
     
+    # Replace Python build placeholders
+    if [[ "$BUILD_PYTHON" = true ]]; then
+        sudo sed -i "s|PYTHON_AFTER_PLACEHOLDER|$PYTHON_AFTER|g" "$FREESLEEP_INSTALLER_SERVICE"
+        sudo sed -i "s|PYTHON_CONDITION_PLACEHOLDER|$PYTHON_CONDITION|g" "$FREESLEEP_INSTALLER_SERVICE"
+    else
+        sudo sed -i "s|PYTHON_AFTER_PLACEHOLDER||g" "$FREESLEEP_INSTALLER_SERVICE"
+        sudo sed -i "/PYTHON_CONDITION_PLACEHOLDER/d" "$FREESLEEP_INSTALLER_SERVICE"
+    fi
+    
     # Add biometrics enable command if requested
     if [[ "$FREESLEEP_BIOMETRICS" = true ]]; then
         BIOMETRICS_CMD="ExecStartPost=/bin/sh -c 'sleep 10 && /bin/bash /home/dac/free-sleep/scripts/enable_biometrics.sh || true'"
@@ -1175,7 +878,8 @@ EOF
     # sudo ln -sf ../freesleep-installer.service "$MOUNT_DIR/etc/systemd/system/network-online.target.wants/freesleep-installer.service"
     
     echo "[+] FreeSleep auto-installer configured"
-    echo "    ✓ Will install after network is online (network-online.target)"
+    echo "    ✓ Waits for pairing-complete.flag (monitor-pairing service must finish first)"
+    echo "    ✓ Then installs after network is stable (network-online.target)"
     echo "    ✓ Branch: $FREESLEEP_BRANCH"
     if [[ "$FREESLEEP_BIOMETRICS" = true ]]; then
         echo "    ✓ Biometrics will be enabled after installation"
@@ -1471,13 +1175,23 @@ ConditionPathExists=!/var/lib/freesleep-service-fixed.flag
 Type=oneshot
 ExecStart=/bin/sh -c '\
   if [ -f /etc/systemd/system/free-sleep.service ]; then \
-    echo "Adding subsystem dependency to free-sleep.service..."; \
+    echo "Adding subsystem and frank dependencies to free-sleep.service..."; \
+    MODIFIED=0; \
     if ! grep -q "After=.*enable-subsystems.service" /etc/systemd/system/free-sleep.service; then \
       sed -i "/^After=/s/$/ enable-subsystems.service/" /etc/systemd/system/free-sleep.service; \
+      MODIFIED=1; \
+      echo "✓ Added enable-subsystems.service dependency"; \
+    fi; \
+    if ! grep -q "After=.*frank.service" /etc/systemd/system/free-sleep.service; then \
+      sed -i "/^After=/s/$/ frank.service/" /etc/systemd/system/free-sleep.service; \
+      MODIFIED=1; \
+      echo "✓ Added frank.service dependency (ensures dac.sock exists before connecting)"; \
+    fi; \
+    if [ $MODIFIED -eq 1 ]; then \
       systemctl daemon-reload; \
-      echo "✓ free-sleep.service updated with subsystem dependency"; \
+      echo "✓ free-sleep.service dependencies updated"; \
     else \
-      echo "✓ free-sleep.service already has subsystem dependency"; \
+      echo "✓ free-sleep.service already has all required dependencies"; \
     fi; \
   else \
     echo "⚠ free-sleep.service not found, will retry on next boot"; \
@@ -1550,6 +1264,12 @@ if [ -f ~/validate_deployment.sh ] && [ -z "$VALIDATION_SHOWN" ]; then
     echo "To check FreeSleep logs:"
     echo "  tail -f /persistent/free-sleep-data/logs/server.log"
     echo ""
+    echo "Troubleshooting & Maintenance:"
+    echo "  sh /home/dac/free-sleep/scripts/debug.sh      # System diagnostics"
+    echo "  sh /home/dac/free-sleep/scripts/restart.sh    # Restart FreeSleep"
+    echo "  sh /home/dac/free-sleep/scripts/reset.sh      # Factory reset"
+    echo "  sh /home/dac/free-sleep/scripts/update.sh     # Update to latest"
+    echo ""
     echo "To enable/disable biometrics:"
     echo "  sh /home/dac/free-sleep/scripts/enable_biometrics.sh"
     echo "  sh /home/dac/free-sleep/scripts/disable_biometrics.sh"
@@ -1580,12 +1300,6 @@ FILES_TO_REPLACE=(
     "./etc/resolv.conf"
 )
 
-# Only delete shadow and sshd_config if we actually modified them (password was provided)
-if [[ ! -z "$PASSWORD" ]]; then
-    FILES_TO_REPLACE+=("./etc/shadow")
-    FILES_TO_REPLACE+=("./etc/ssh/sshd_config")
-fi
-
 # Delete old versions of files that we're replacing (if they exist)
 for file in "${FILES_TO_REPLACE[@]}"; do
     if sudo tar -tf "$ROOTFS_TAR" "$file" >/dev/null 2>&1; then
@@ -1610,20 +1324,9 @@ sudo cp "$ROOTFS_PATCHED" "$ROOTFS_TAR_GZ"
 echo ""
 echo "[*] Verifying patched files..."
 if sudo test -f "$STAGING_DIR/etc/ssh/authorized_keys"; then
-    echo "  ✓ SSH authorized_keys file created"
+    echo "  ✓ SSH authorized_keys file created (passwordless root access)"
 else
     echo "  ✗ Warning: Could not verify authorized_keys"
-fi
-
-if [[ ! -z "$PASSWORD" ]] && sudo test -f "$STAGING_DIR/etc/ssh/sshd_config"; then
-    echo "  ✓ SSH configuration updated"
-fi
-
-if [[ ! -z "$SSID" ]] && sudo test -f "$STAGING_DIR/etc/wpa_supplicant/wpa_supplicant-wlan0.conf"; then
-    echo "  ✓ WiFi connection configured: $SSID"
-    if sudo test -f "$STAGING_DIR/etc/wifi/opensleep-wifi"; then
-        echo "  ✓ opensleep-wifi service created (WiFi hardware initialization)"
-    fi
 fi
 
 if [[ ! -z "$MAC_ADDRESS" ]]; then
@@ -1643,6 +1346,9 @@ if [[ "$FREESLEEP_INSTALL" = true ]]; then
         echo "  ✓ FreeSleep auto-installer configured"
         echo "    Repository: https://github.com/$FREESLEEP_REPO_USER/free-sleep"
         echo "    Branch: $FREESLEEP_BRANCH"
+        if [[ "$BUILD_PYTHON" = true ]]; then
+            echo "    Python 3.11: Will build on first boot (30-60 min)"
+        fi
         if [[ "$FREESLEEP_BIOMETRICS" = true ]]; then
             echo "    Biometrics: Enabled"
         fi
@@ -1680,20 +1386,16 @@ echo "======================================"
 echo "[+] Patch workflow complete!"
 echo "======================================"
 
-if [[ ! -z "$SSID" ]]; then
-    echo ""
-    echo "WiFi Configuration:"
-    echo "  - Network: $SSID"
-    echo "  - free-sleep-wifi service will initialize WiFi hardware"
-    echo "  - wpa_supplicant will connect automatically on boot"
-    echo "  - variscite-wifi.service masked (EEPROM check bypassed)"
-fi
+echo ""
+echo "🔄 Capybara-Assisted Installation Workflow:"
+echo "  • WiFi configured automatically via Eight Sleep app"
+echo "  • No manual network setup required"
+echo "  • After pairing, system auto-transitions to FreeSleep"
 
 if [[ ! -z "$MAC_ADDRESS" ]]; then
     echo ""
     echo "MAC Address Configuration:"
     echo "  - Persistent MAC: $MAC_ADDRESS"
-    echo "  - Configured via free-sleep-mac service"
     echo "  - Will NOT change on factory reset"
     echo "  - Survives reboots and system updates"
 fi
@@ -1710,7 +1412,6 @@ fi
 if [[ "$FREESLEEP_INSTALL" = true ]]; then
     echo ""
     echo "FreeSleep Configuration:"
-    echo "  - Auto-installer will run on SECOND boot (after network initialization)"
     echo "  - Repository: https://github.com/$FREESLEEP_REPO_USER/free-sleep"
     echo "  - Branch: $FREESLEEP_BRANCH"
     echo "  - Server will be accessible at http://<POD_IP>:3000"
@@ -1723,34 +1424,101 @@ if [[ "$FREESLEEP_INSTALL" = true ]]; then
     else
         echo "  - ⚠️  Timezone defaults to UTC - set via web UI Settings for correct schedule times!"
     fi
-    echo "  - Eight Sleep Capybara service disabled (replaced by subsystem services)"
-    if [[ ! -z "$SSID" ]]; then
-        echo "  - Device will remain reachable via WiFi: $SSID"
-    fi
     echo ""
-    echo "Boot Sequence:"
-    echo "  Factory Reset: Extracts rootfs.tar.gz with patched services"
-    echo "  1. First boot: Immediate reboot to apply rootfs changes (firstboot-reboot.service)"
-    echo "  2. Second boot: Network init + Eight Sleep disabled → Automatic reboot"
-    echo "  3. Third boot: FreeSleep installation (5-10 minutes) → Automatic reboot"  
-    echo "  4. Fourth boot: FreeSleep running, all services configured"
+    echo "┌─────────────────────────────────────────────────────────────────────┐"
+    echo "│          Boot Sequence (Capybara-Assisted Workflow)                │"
+    echo "└─────────────────────────────────────────────────────────────────────┘"
+    echo ""
+    echo "  Factory Reset"
+    echo "  └─> Extracts rootfs.tar.gz with FreeSleep services embedded"
+    echo ""
+    echo "  ╔═══════════════════════════════════════════════════════════════════╗"
+    echo "  ║  BOOT 1: First Boot (Immediate Reboot)                           ║"
+    echo "  ╚═══════════════════════════════════════════════════════════════════╝"
+    echo "      • firstboot-reboot.service detects factory reset"
+    echo "      • Creates /var/lib/firstboot-complete.flag"
+    echo "      • Triggers immediate reboot (~30 seconds)"
+    echo "      • Purpose: Apply rootfs changes to running system"
+    echo ""
+    echo "  ╔═══════════════════════════════════════════════════════════════════╗"
+    echo "  ║  BOOT 2: Pairing Boot (Eight Sleep App)                          ║"
+    echo "  ╚═══════════════════════════════════════════════════════════════════╝"
+    echo "      • Eight Sleep services ACTIVE (capybara.service running)"
+    echo "      • Pod ready for pairing via Eight Sleep mobile app"
+    echo ""
+    echo "      ┌─────────────────────────────────────────────────┐"
+    echo "      │  👤 USER ACTION REQUIRED                        │"
+    echo "      │  ════════════════════════                       │"
+    echo "      │  1. Open Eight Sleep mobile app                │"
+    echo "      │  2. Select 'Pair Pod'                           │"
+    echo "      │  3. Follow pairing wizard                       │"
+    echo "      │  4. Select WiFi network & enter password        │"
+    echo "      │  5. Wait for pairing to complete                │"
+    echo "      │     (LED will indicate success)                 │"
+    echo "      └─────────────────────────────────────────────────┘"
+    echo ""
+    echo "      • Capybara configures WiFi (wpa_supplicant + NetworkManager)"
+    echo "      • Creates /etc/NetworkManager/system-connections/customer-wifi.nmconnection"
+    echo "      • monitor-pairing.service detects WiFi file"
+    echo "      • Validates network connectivity (ping 8.8.8.8)"
+    echo "      • Waits 2 minutes for Eight Sleep app to complete setup"
+    echo "      • Disables update services (swupdate, defibrillator, etc.)"
+    echo "      • Creates /var/lib/pairing-complete.flag"
+    echo "      • freesleep-installer.service can now start"
+    echo ""
+    echo "  ╔═══════════════════════════════════════════════════════════════════╗"
+    echo "  ║  BOOT 3: Installation Boot (FreeSleep Setup)                     ║"
+    echo "  ╚═══════════════════════════════════════════════════════════════════╝"
+    echo "      • freesleep-installer.service starts"
+    echo "      • Clones FreeSleep repository from GitHub"
+    echo "      • Installs Node.js dependencies (app + server)"
+    echo "      • Builds production bundles"
+    if [[ "$FREESLEEP_BIOMETRICS" = true ]]; then
+    echo "      • Enables biometrics (enable_biometrics.sh)"
+    fi
+    echo "      • Enables free-sleep.service"
+    echo "      • Installation duration: ~5-10 minutes"
+    echo "      • System triggers final reboot"
+    echo ""
+    echo "  ╔═══════════════════════════════════════════════════════════════════╗"
+    echo "  ║  BOOT 4: Production Boot (FreeSleep Operational) ✓               ║"
+    echo "  ╚═══════════════════════════════════════════════════════════════════╝"
+    echo "      • free-sleep.service starts FreeSleep server"
+    echo "      • Web UI accessible at http://<POD_IP>:3000"
     if [[ -n "$FREESLEEP_TIMEZONE" ]]; then
-        echo "                 Timezone automatically set on startup"
+    echo "      • Timezone auto-configured: $FREESLEEP_TIMEZONE"
     fi
+    echo "      • All subsystems initialized and operational"
+    echo "      • Temperature control via frankenfirmware active"
+    echo "      • Sleep tracking via biometrics active"
     echo ""
-    echo "Hardware Initialization (on every boot):"
-    echo "  populate-deviceinfo → enable-subsystems → frank → free-sleep"
-    echo "  - populate-deviceinfo: Creates /deviceinfo/ files from MAC address"
-    echo "  - enable-subsystems: Initializes PCAL6416A GPIO expander"
-    echo "  - frank: Frankenfirmware connects to hardware"
-    echo "  - free-sleep: FreeSleep controls temperature via frankenfirmware"
+    echo "  ┌─────────────────────────────────────────────────────────────────┐"
+    echo "  │  Hardware Initialization Chain (every boot):                   │"
+    echo "  └─────────────────────────────────────────────────────────────────┘"
+    echo "      populate-deviceinfo → enable-subsystems → frank → free-sleep"
     echo ""
-    echo "During installation:"
-    echo "  - Wait 20-25 minutes total for all reboots and installation"
-    echo "  - First reboot happens within seconds (applies filesystem changes)"
+    echo "      • populate-deviceinfo: Creates /deviceinfo/ from MAC address"
+    echo "      • enable-subsystems:   Initializes PCAL6416A GPIO expander"
+    echo "      • frank:               Frankenfirmware hardware interface"
+    echo "      • free-sleep:          FreeSleep server (port 3000)"
+    echo ""
+    echo "╔═══════════════════════════════════════════════════════════════════╗"
+    echo "║  Expected Timeline                                                ║"
+    echo "╚═══════════════════════════════════════════════════════════════════╝"
+    echo "  • Flash SD card & insert: ~5 minutes"
+    echo "  • Boot 1 (factory reset): ~30 seconds"
+    echo "  • Boot 2 (pairing ready): ~1 minute"
+    echo "  • Eight Sleep app pairing: ~5-10 minutes (user action)"
+    echo "  • Auto-transition: ~30 seconds"
+    echo "  • Boot 3 (installation): ~5-10 minutes"
+    echo "  • Boot 4 (operational): ~30 seconds"
+    echo "  ─────────────────────────────────────────────────────────────────"
+    echo "  TOTAL TIME: ~15-30 minutes (including user pairing)"
+    echo ""
+    echo "After Pairing:"
     echo "  - Check status: systemctl status freesleep-installer"
     echo "  - View logs: journalctl -u freesleep-installer -f"
-    echo "  - After completion: http://<POD_IP>:3000"
+    echo "  - Access FreeSleep: http://<POD_IP>:3000"
 fi
 
 if [[ ! -z "$VALIDATION_SCRIPT" ]]; then

@@ -1,5 +1,46 @@
 #!/bin/bash
 
+# Detect which Python to use
+if [ -x "/opt/python3.12/bin/python3.12" ]; then
+    echo "Using Python 3.12 from /opt/python3.12 (built for GLIBC 2.33 compatibility)"
+    PYTHON_CMD="/opt/python3.12/bin/python3.12"
+    VENV_PATH="/home/dac/venv"
+    
+    echo "Creating new python venv with Python 3.12..."
+    $PYTHON_CMD -m venv $VENV_PATH
+    
+    echo "Activating python venv..."
+    source $VENV_PATH/bin/activate
+    
+    echo "Installing packages..."
+    set -x
+    $VENV_PATH/bin/python -m pip install numpy scipy pandas cbor2 watchdog "sentry-sdk"
+    set +x
+    
+    echo "Python 3.12 venv setup complete!"
+    exit 0
+elif [ -x "/opt/python3.11/bin/python3.11" ]; then
+    echo "Using Python 3.11 from /opt/python3.11 (built for GLIBC 2.33 compatibility)"
+    PYTHON_CMD="/opt/python3.11/bin/python3.11"
+    VENV_PATH="/home/dac/venv"
+    
+    echo "Creating new python venv with Python 3.11..."
+    $PYTHON_CMD -m venv $VENV_PATH
+    
+    echo "Activating python venv..."
+    source $VENV_PATH/bin/activate
+    
+    echo "Installing packages..."
+    set -x
+    $VENV_PATH/bin/python -m pip install numpy scipy pandas cbor2 watchdog "sentry-sdk"
+    set +x
+    
+    echo "Python 3.11 venv setup complete!"
+    exit 0
+fi
+
+# Fallback to system Python 3.9 with patches
+echo "Using system Python 3.9 (requires file patching)"
 PYTHON_VERSION_DOT=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
 PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}{sys.version_info.minor}")')
 

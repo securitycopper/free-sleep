@@ -1,6 +1,24 @@
 #!/bin/bash
 
-python3 /home/dac/free-sleep/scripts/is_biometrics_installed.py
+# Detect which Python to use
+if [ -x "/opt/python3.12/bin/python3.12" ]; then
+    echo "Using Python 3.12 from /opt/python3.12 (built for GLIBC 2.33 compatibility)"
+    PYTHON_CMD="/opt/python3.12/bin/python3.12"
+    PYTHON_BIN="/opt/python3.12/bin/python3.12"
+    PIP_CMD="/opt/python3.12/bin/pip3.12"
+elif [ -x "/opt/python3.11/bin/python3.11" ]; then
+    echo "Using Python 3.11 from /opt/python3.11 (built for GLIBC 2.33 compatibility)"
+    PYTHON_CMD="/opt/python3.11/bin/python3.11"
+    PYTHON_BIN="/opt/python3.11/bin/python3.11"
+    PIP_CMD="/opt/python3.11/bin/pip3.11"
+else
+    echo "Using system Python 3.9"
+    PYTHON_CMD="python3"
+    PYTHON_BIN="python3"
+    PIP_CMD="pip3"
+fi
+
+$PYTHON_CMD /home/dac/free-sleep/scripts/is_biometrics_installed.py
 result=$?
 
 if [ $result -eq 0 ]; then

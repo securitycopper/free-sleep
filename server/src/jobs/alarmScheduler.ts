@@ -47,10 +47,17 @@ const executeAlarm = async ({ vibrationIntensity, duration, vibrationPattern, si
     const currentTime = moment.tz(settingsDB.data.timeZone);
     const alarmTimeEpoch = currentTime.unix();
 
+    // Convert vibration pattern string to number for frankenfirmware
+    const patternMap: Record<string, number> = {
+      'double': 0,  // Default pattern: double buzz
+      'rise': 1,    // Rising intensity pattern
+    };
+    const patternNumber = patternMap[vibrationPattern] ?? 0;
+
     const alarmPayload = {
       pl: vibrationIntensity,
       du: min10Duration,
-      pi: vibrationPattern,
+      pi: patternNumber,
       tt: alarmTimeEpoch,
     };
 

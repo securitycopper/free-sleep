@@ -1,8 +1,86 @@
 # Known Working Commands for Pod 3 Testing
 
-## Date: November 9, 2025
+## Date: November 13, 2025 (Updated for Capybara-Assisted Workflow)
 ## Hardware: Eight Sleep Pod 3 (frankenfirmware)
-## Network: Static IP 192.168.2.52/24, Gateway 192.168.2.1
+## Network: DHCP via WiFi (configured by Eight Sleep app)
+## Deployment Server: 192.168.2.52:8822
+
+---
+
+## ⚠️ CRITICAL: Update Services Protection
+
+### Problem
+Update services (swupdate, defibrillator, swupdate-progress) monitor filesystem and trigger firmware updates/rollbacks that wipe modifications.
+
+### Solution: ALWAYS Disable on First Login
+```bash
+# Check if update services are running
+sudo systemctl is-active swupdate swupdate-progress defibrillator
+
+# If active, disable immediately (CRITICAL)
+sudo systemctl disable --now swupdate swupdate-progress defibrillator swupdate.socket
+sudo systemctl mask swupdate swupdate-progress defibrillator swupdate.socket
+
+# Verify they're disabled
+systemctl list-unit-files | grep -E "swupdate|defibrillator"
+```
+
+**Status**: ✅ VALIDATED - This command prevented firmware rollback on November 13, 2025
+
+---
+
+---
+
+## Boot Sequence Validation (Capybara-Assisted)
+
+### Check Boot Phase
+```bash
+# Run validation script with boot phase detection
+bash /home/rewt/validate_deployment.sh | head -100
+
+# Check flag files to determine boot phase
+ls -la /var/lib/firstboot-complete.flag      # BOOT 1 complete
+ls -la /var/lib/pairing-complete.flag        # BOOT 2->3 transition
+ls -la /var/lib/freesleep-installed.flag     # BOOT 4 complete
+
+# Check for pairing markers
+sudo ls -la /deviceinfo/magic_uuid           # May not exist
+sudo ls -la /deviceinfo/                     # Check all files
+```
+
+### Check Pairing Monitor Service
+```bash
+# Check if monitor-pairing service is running
+sudo systemctl status monitor-pairing.service --no-pager
+
+# Check logs
+sudo journalctl -u monitor-pairing.service --no-pager -n 50
+
+# Check pairing completion marker (VALIDATED: This is the correct file!)
+ls -la /etc/NetworkManager/system-connections/customer-wifi.nmconnection
+```
+
+**CRITICAL DISCOVERY (November 13, 2025)**: 
+The pairing completion marker is **`/etc/NetworkManager/system-connections/customer-wifi.nmconnection`**, NOT `magic_uuid`.
+
+This file is created by Capybara when the Eight Sleep app pairs the Pod and configures WiFi via Bluetooth.
+
+### Expected Service States by Boot Phase
+
+**BOOT 2 (Pairing Ready)**:
+- Capybara: ACTIVE (needed for pairing)
+- Update services: ACTIVE (Eight Sleep app may need them)
+- monitor-pairing: RUNNING (waiting for pairing)
+
+**BOOT 3 (Post-Pairing)**:
+- Update services: DISABLED (by monitor-pairing)
+- pairing-complete.flag: EXISTS
+- freesleep-installer: RUNNING
+
+**BOOT 4 (Operational)**:
+- FreeSleep: ACTIVE
+- Capybara: MASKED
+- Update services: MASKED
 
 ---
 

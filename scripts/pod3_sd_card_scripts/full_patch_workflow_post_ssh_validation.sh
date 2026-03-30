@@ -116,7 +116,103 @@ else
 fi
 echo ""
 
-# === Service Status ===
+# === Boot Sequence Detection ===
+echo "=========================================="
+echo "Boot Sequence State Detection"
+echo "=========================================="
+echo ""
+
+BOOT_PHASE="UNKNOWN"
+BOOT_ISSUES=()
+
+# Detect boot phase based on flags and services
+if [ ! -f /var/lib/firstboot-complete.flag ]; then
+    BOOT_PHASE="BOOT 1 (Factory Reset In Progress)"
+    echo "⏳ BOOT 1: Factory reset reboot in progress"
+    echo "   Expected: System will reboot automatically"
+elif [ ! -f /var/lib/pairing-complete.flag ] && [ ! -f /var/lib/freesleep-installed.flag ]; then
+    BOOT_PHASE="BOOT 2 (Pairing Ready)"
+    echo "📱 BOOT 2: Ready for Eight Sleep app pairing"
+    echo "   Expected: Capybara active, update services ENABLED"
+    echo "   Action: Use Eight Sleep app to pair Pod"
+    
+    # Verify BOOT 2 requirements
+    if ! systemctl is-active capybara >/dev/null 2>&1; then
+        BOOT_ISSUES+=("❌ Capybara service NOT active (pairing will fail)")
+    else
+        echo "   ✓ Capybara service active (ready for pairing)"
+    fi
+    
+    if [ ! -f /etc/NetworkManager/system-connections/customer-wifi.nmconnection ]; then
+        echo "   ⏳ Waiting for pairing (customer-wifi.nmconnection not yet created)"
+    else
+        echo "   ⚠️  customer-wifi.nmconnection exists but pairing-complete.flag missing"
+        BOOT_ISSUES+=("⚠️  Pairing detected but monitor-pairing.service may have failed")
+    fi
+    
+elif [ -f /var/lib/pairing-complete.flag ] && [ ! -f /var/lib/freesleep-installed.flag ]; then
+    BOOT_PHASE="BOOT 3 (FreeSleep Installation)"
+    echo "🔧 BOOT 3: Pairing complete, FreeSleep installation phase"
+    echo "   Expected: Update services DISABLED, FreeSleep installing"
+    
+    # Verify BOOT 3 requirements
+    UPDATE_SERVICES_ACTIVE=false
+    for svc in swupdate swupdate-progress defibrillator; do
+        if systemctl is-active "$svc" >/dev/null 2>&1; then
+            BOOT_ISSUES+=("❌ $svc still ACTIVE (should be disabled after pairing)")
+            UPDATE_SERVICES_ACTIVE=true
+        fi
+    done
+    
+    if [ "$UPDATE_SERVICES_ACTIVE" = false ]; then
+        echo "   ✓ Update services disabled (safe to install FreeSleep)"
+    fi
+    
+    if systemctl is-active freesleep-installer >/dev/null 2>&1; then
+        echo "   ⏳ FreeSleep installer currently running"
+    elif systemctl is-failed freesleep-installer >/dev/null 2>&1; then
+        BOOT_ISSUES+=("❌ FreeSleep installer FAILED")
+    fi
+    
+elif [ -f /var/lib/freesleep-installed.flag ]; then
+    BOOT_PHASE="BOOT 4 (FreeSleep Operational)"
+    echo "✅ BOOT 4: FreeSleep installation complete"
+    echo "   Expected: FreeSleep running, Eight Sleep services disabled"
+    
+    # Verify BOOT 4 requirements
+    if systemctl is-active free-sleep >/dev/null 2>&1; then
+        echo "   ✓ FreeSleep service active"
+    else
+        BOOT_ISSUES+=("❌ FreeSleep service NOT active")
+    fi
+    
+    if systemctl is-active capybara >/dev/null 2>&1; then
+        BOOT_ISSUES+=("⚠️  Capybara still active (should be masked in BOOT 4)")
+    fi
+fi
+
+echo ""
+echo "Current Boot Phase: $BOOT_PHASE"
+echo ""
+
+# Display boot sequence flags
+echo "=== Boot Sequence Flags ==="
+echo "firstboot-complete.flag: $([ -f /var/lib/firstboot-complete.flag ] && echo '✓ EXISTS' || echo '✗ MISSING')"
+echo "pairing-complete.flag: $([ -f /var/lib/pairing-complete.flag ] && echo '✓ EXISTS' || echo '✗ MISSING')"
+echo "freesleep-installed.flag: $([ -f /var/lib/freesleep-installed.flag ] && echo '✓ EXISTS' || echo '✗ MISSING')"
+echo "customer-wifi.nmconnection: $([ -f /etc/NetworkManager/system-connections/customer-wifi.nmconnection ] && echo '✓ EXISTS (paired)' || echo '✗ MISSING (not paired)')"
+echo ""
+
+# Display issues if any
+if [ ${#BOOT_ISSUES[@]} -gt 0 ]; then
+    echo "⚠️  BOOT SEQUENCE ISSUES DETECTED:"
+    for issue in "${BOOT_ISSUES[@]}"; do
+        echo "   $issue"
+    done
+    echo ""
+fi
+
+echo "=== Service Status ==="
 echo "=========================================="
 echo "Services That SHOULD Be Running"
 echo "=========================================="
@@ -226,25 +322,71 @@ systemctl status variscite-wifi --no-pager || echo "variscite-wifi masked or not
 echo ""
 
 echo "=== capybara Service ==="
-echo "Purpose: Eight Sleep's main control daemon (conflicts with FreeSleep)"
-echo "Expected: disabled/inactive/masked"
+echo "Purpose: Eight Sleep's main control daemon (handles pairing in BOOT 2)"
+if [ "$BOOT_PHASE" = "BOOT 2 (Pairing Ready)" ]; then
+    echo "Expected: ACTIVE (needed for pairing)"
+else
+    echo "Expected: disabled/inactive/masked (conflicts with FreeSleep)"
+fi
 echo "Status:"
 systemctl status capybara --no-pager || echo "capybara service status"
 if systemctl is-masked capybara >/dev/null 2>&1; then
-    echo "✓ capybara is MASKED (correct - prevents auto-start)"
+    if [ "$BOOT_PHASE" = "BOOT 2 (Pairing Ready)" ]; then
+        echo "✗ capybara is MASKED (cannot pair - incorrect for BOOT 2)"
+    else
+        echo "✓ capybara is MASKED (correct - prevents auto-start)"
+    fi
 elif systemctl is-active capybara >/dev/null 2>&1; then
-    echo "✗ capybara is ACTIVE (will interfere with FreeSleep - should be masked)"
+    if [ "$BOOT_PHASE" = "BOOT 2 (Pairing Ready)" ]; then
+        echo "✓ capybara is ACTIVE (correct - ready for pairing)"
+    else
+        echo "✗ capybara is ACTIVE (will interfere with FreeSleep - should be masked)"
+    fi
 else
     echo "ℹ capybara is inactive but not masked"
 fi
 echo ""
 
-echo "=== Eight Sleep Services (Should be disabled) ==="
-echo "Expected: swupdate-progress, swupdate, defibrillator, eight-kernel, telegraf, vector"
+echo "=== Eight Sleep Update Services ==="
+echo "Services: swupdate-progress, swupdate, defibrillator"
+if [ "$BOOT_PHASE" = "BOOT 2 (Pairing Ready)" ]; then
+    echo "Expected: ACTIVE (Eight Sleep app may need to update firmware)"
+else
+    echo "Expected: DISABLED/MASKED (prevent unwanted updates)"
+fi
 echo "Status:"
-for service in swupdate-progress swupdate defibrillator eight-kernel telegraf vector swupdate.socket; do
+for service in swupdate-progress swupdate defibrillator swupdate.socket; do
     if systemctl is-active "$service" >/dev/null 2>&1; then
-        echo "  ⚠ $service is ACTIVE (should be disabled)"
+        if [ "$BOOT_PHASE" = "BOOT 2 (Pairing Ready)" ]; then
+            echo "  ✓ $service is ACTIVE (correct for BOOT 2 pairing)"
+        else
+            echo "  ⚠ $service is ACTIVE (should be disabled after pairing)"
+        fi
+    elif systemctl is-masked "$service" >/dev/null 2>&1; then
+        if [ "$BOOT_PHASE" = "BOOT 2 (Pairing Ready)" ]; then
+            echo "  ✗ $service is MASKED (pairing may fail)"
+        else
+            echo "  ✓ $service is masked (correct)"
+        fi
+    else
+        echo "  ✓ $service is inactive"
+    fi
+done
+echo ""
+
+echo "=== Pairing Monitor Service ==="
+echo "Purpose: Waits for Capybara pairing, then disables update services"
+echo "Status:"
+systemctl status monitor-pairing --no-pager || echo "monitor-pairing service not found/completed"
+echo ""
+
+echo "=== Other Eight Sleep Services ==="
+echo "Services: eight-kernel, telegraf, vector, dac"
+echo "Expected: Status varies by boot phase"
+echo "Status:"
+for service in eight-kernel telegraf vector dac; do
+    if systemctl is-active "$service" >/dev/null 2>&1; then
+        echo "  ℹ $service is ACTIVE"
     elif systemctl is-masked "$service" >/dev/null 2>&1; then
         echo "  ✓ $service is masked"
     else
