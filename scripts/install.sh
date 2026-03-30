@@ -234,6 +234,25 @@ StandardError=append:/persistent/free-sleep-data/logs/free-sleep-update.log
 
 EOF
 # --------------------------------------------------------------------------------
+# Configure NTP to use local gateway as fallback (works even when WAN is blocked)
+
+echo "Configuring NTP with local gateway fallback..."
+GATEWAY=$(ip route show default 2>/dev/null | awk '/default/ {print $3; exit}')
+if [ -n "$GATEWAY" ]; then
+  mkdir -p /etc/systemd/timesyncd.conf.d
+  cat > /etc/systemd/timesyncd.conf.d/local.conf <<NTPEOF
+[Time]
+NTP=$GATEWAY
+FallbackNTP=pool.ntp.org time1.google.com
+NTPEOF
+  echo "NTP will use gateway $GATEWAY as primary time source"
+else
+  echo "WARNING: Could not detect gateway for NTP config"
+fi
+systemctl restart systemd-timesyncd 2>/dev/null || true
+timedatectl set-ntp true
+
+# --------------------------------------------------------------------------------
 # Graceful device time update (optional)
 
 echo "Attempting to update device time from Google..."

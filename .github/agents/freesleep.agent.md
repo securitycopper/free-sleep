@@ -234,11 +234,21 @@ sh /home/dac/free-sleep/scripts/enable_biometrics.sh
 ```bash
 date && timedatectl status
 ```
-**Fix:**
+**Fix — enable NTP (requires internet):**
 ```bash
 sudo timedatectl set-ntp true
 sudo timedatectl set-timezone America/Los_Angeles   # adjust to your timezone
 ```
+**If WAN is blocked, point NTP at the local router/gateway instead:**
+```bash
+GATEWAY=$(ip route show default | awk '/default/ {print $3; exit}')
+sudo mkdir -p /etc/systemd/timesyncd.conf.d
+printf '[Time]\nNTP=%s\nFallbackNTP=pool.ntp.org\n' "$GATEWAY" | sudo tee /etc/systemd/timesyncd.conf.d/local.conf
+sudo systemctl restart systemd-timesyncd
+sudo timedatectl set-ntp true
+sleep 10 && timedatectl status | grep synchronized   # should show: yes
+```
+After the clock is corrected, restart `free-sleep.service` so the job scheduler re-initializes with the right time.
 
 ### Symptom 10: WiFi Not Connected
 ```bash
@@ -252,6 +262,21 @@ sudo nmcli connection add type wifi con-name "MyNetwork" ifname wlan0 ssid "MyNe
 sudo sed -i 's/uuid=.*/uuid=700a7a76-2105-4f46-b1b4-c9f3c791c440/' /persistent/system-connections/*.nmconnection
 sudo nmcli connection reload
 ```
+
+### Symptom 11: Temperature Stuck at 55°F (`currentTemperatureLevel: -100`)
+**Cause:** `-100` is the minimum clamp value the frank socket returns when hardware comms haven't fully initialized. This is a sentinel/false reading, not the real water temperature. Usually happens after a capybara conflict or ungraceful shutdown where frank connected but the hardware control layer wasn't ready.
+
+**Diagnosis:** If `currentTemperatureF` is exactly 55°F and the pod has been on for more than 2–3 minutes, it's a false reading.
+```bash
+curl -s http://<POD_IP>:3000/api/deviceStatus | grep currentTemperatureF
+# If 55, restart free-sleep to re-establish the frank connection
+```
+**Fix:**
+```bash
+sudo systemctl restart free-sleep.service
+# Wait ~30 seconds, then re-check — temperature should reflect real water temp (~82°F at rest)
+```
+After a clean reboot with capybara masked, the reading corrects itself immediately (typically shows ~82°F at rest).
 
 ---
 
@@ -284,6 +309,7 @@ When a user reports a startup problem:
    - FreeSleep server → Symptom 2 or 6 or 7
    - Time/scheduling → Symptom 9
    - Biometrics → Symptom 8
+   - Temperature stuck at 55°F → Symptom 11 (restart free-sleep)
 4. **Apply the targeted fix** and re-validate.
 
 ---
@@ -296,6 +322,7 @@ When a user reports a startup problem:
 - `swupdate` / `defibrillator` must be **disabled** or they may overwrite FreeSleep. Also handled by `install.sh` now.
 - If `free-sleep.service` takes 10–15 minutes to come up after boot, suspect `capybara` is running and winning the hardware race — `Restart=always` will eventually win, but masking capybara is the correct fix.
 - System clock being wrong (e.g. stuck at install date) means NTP never synced. Fix: `sudo timedatectl set-ntp true`.
+- `currentTemperatureF: 55` / `currentTemperatureLevel: -100` is a **false reading** (hardware sentinel value), not real water temperature. It means frank connected but hardware wasn't fully initialized — restart `free-sleep.service` to fix. After a clean boot with capybara masked, the real temperature (~82°F at rest) is reported immediately.
 - Biometrics are **optional**. All temperature control works without them.
 - The web UI is served at `http://<POD_IP>:3000` — no separate web server.
 - Node.js version: **24.11.0** via Volta at `/home/dac/.volta/bin/`.
