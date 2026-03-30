@@ -177,7 +177,8 @@ echo "Creating systemd service file at $SERVICE_FILE..."
 cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=Free Sleep Server
-After=network.target
+After=network.target frank.service
+Wants=frank.service
 
 [Service]
 ExecStart=/home/$USERNAME/.volta/bin/npm run start
@@ -195,6 +196,14 @@ EOF
 echo "Reloading systemd daemon and enabling the service..."
 systemctl daemon-reload
 systemctl enable free-sleep.service
+
+# --------------------------------------------------------------------------------
+# Mask OEM services that conflict with FreeSleep
+echo "Masking OEM services to prevent conflicts..."
+systemctl mask capybara 2>/dev/null || true
+systemctl stop capybara 2>/dev/null || true
+systemctl disable swupdate swupdate-progress defibrillator 2>/dev/null || true
+systemctl stop swupdate 2>/dev/null || true
 
 echo "Starting free-sleep.service..."
 systemctl start free-sleep.service
