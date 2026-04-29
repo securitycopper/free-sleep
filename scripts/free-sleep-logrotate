@@ -1,0 +1,11 @@
+/persistent/free-sleep-data/logs/free-sleep.log
+/persistent/free-sleep-data/logs/free-sleep-stream.log
+{
+    daily
+    rotate 7
+    compress
+    missingok
+    notifempty
+    copytruncate
+    maxsize 50M
+}

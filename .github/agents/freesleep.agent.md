@@ -263,6 +263,50 @@ sudo sed -i 's/uuid=.*/uuid=700a7a76-2105-4f46-b1b4-c9f3c791c440/' /persistent/s
 sudo nmcli connection reload
 ```
 
+### Symptom 12: `/persistent` Disk Full (ENOSPC) — RAW Files Accumulating
+**Cause:** OEM `frankenfirmware` writes piezo sensor recordings as `*.RAW` files to `/persistent` continuously (~4 files/day, ~7.3MB each). When the biometrics service is not running they are never consumed, filling the 966MB partition in ~30 days. The service log will show `ENOSPC: no space left on device` and the server will crash.
+
+**Diagnosis:**
+```bash
+df -h /persistent           # Use% will be 100%
+sudo ls /persistent/*.RAW 2>/dev/null | wc -l   # large number of RAW files
+sudo tail -20 /persistent/free-sleep-data/logs/free-sleep.log | grep ENOSPC
+```
+
+**Immediate fix — clear RAW files and restart:**
+```bash
+sudo rm /persistent/*.RAW
+sudo rm -f /persistent/free-sleep-data/free-sleep.db-shm \
+           /persistent/free-sleep-data/free-sleep.db-wal
+sudo systemctl restart free-sleep.service
+```
+
+**If DB was corrupted (malformed) by the ENOSPC crash:**
+```bash
+sudo systemctl stop free-sleep
+sudo rm -f /persistent/free-sleep-data/free-sleep.db \
+           /persistent/free-sleep-data/free-sleep.db-shm \
+           /persistent/free-sleep-data/free-sleep.db-wal
+# Recreate DB via migrations:
+sudo -u dac bash -c "export PATH=/home/dac/.volta/bin:\$PATH && cd /home/dac/free-sleep/server && DATABASE_URL=file:/persistent/free-sleep-data/free-sleep.db npx prisma migrate deploy"
+sudo systemctl start free-sleep.service
+```
+
+**Permanent fix — install cleanup timer (included in install.sh as of this fix):**
+```bash
+# On older installs without the timer, install manually:
+sudo sh /home/dac/free-sleep/scripts/install.sh   # re-run install to get timer
+# OR manually:
+printf '#!/bin/sh\nfind /persistent -maxdepth 1 -name "*.RAW" -not -name SEQNO.RAW -mmin +120 -delete\n' | sudo tee /usr/local/bin/cleanup-raw-files.sh
+sudo chmod +x /usr/local/bin/cleanup-raw-files.sh
+sudo cp /home/dac/free-sleep/scripts/free-sleep-cleanup-raw.service /etc/systemd/system/
+sudo cp /home/dac/free-sleep/scripts/free-sleep-cleanup-raw.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now free-sleep-cleanup-raw.timer
+```
+
+Log rotation is also now installed via `/etc/logrotate.d/free-sleep` (daily, 7 days, max 50MB).
+
 ### Symptom 11: Temperature Stuck at 55°F (`currentTemperatureLevel: -100`)
 **Cause:** `-100` is the minimum clamp value the frank socket returns when hardware comms haven't fully initialized. This is a sentinel/false reading, not the real water temperature. Usually happens after a capybara conflict or ungraceful shutdown where frank connected but the hardware control layer wasn't ready.
 
@@ -310,6 +354,7 @@ When a user reports a startup problem:
    - Time/scheduling → Symptom 9
    - Biometrics → Symptom 8
    - Temperature stuck at 55°F → Symptom 11 (restart free-sleep)
+   - Disk full / ENOSPC crash → Symptom 12 (clear RAW files, recreate DB if malformed)
 4. **Apply the targeted fix** and re-validate.
 
 ---
@@ -323,6 +368,7 @@ When a user reports a startup problem:
 - If `free-sleep.service` takes 10–15 minutes to come up after boot, suspect `capybara` is running and winning the hardware race — `Restart=always` will eventually win, but masking capybara is the correct fix.
 - System clock being wrong (e.g. stuck at install date) means NTP never synced. Fix: `sudo timedatectl set-ntp true`.
 - `currentTemperatureF: 55` / `currentTemperatureLevel: -100` is a **false reading** (hardware sentinel value), not real water temperature. It means frank connected but hardware wasn't fully initialized — restart `free-sleep.service` to fix. After a clean boot with capybara masked, the real temperature (~82°F at rest) is reported immediately.
+- **Disk space**: `/persistent` is only 966MB. `frankenfirmware` writes ~7.3MB `.RAW` piezo files continuously (~4/day). Without biometrics running to consume them, the partition fills in ~30 days causing `ENOSPC` crashes. A cleanup timer (`free-sleep-cleanup-raw.timer`) is now installed by `install.sh` to purge files older than 2 hours every hour. Check for this timer on older installs.
 - Biometrics are **optional**. All temperature control works without them.
 - The web UI is served at `http://<POD_IP>:3000` — no separate web server.
 - Node.js version: **24.11.0** via Volta at `/home/dac/.volta/bin/`.

@@ -1,0 +1,6 @@
+[Unit]
+Description=Clean up stale piezo RAW files from /persistent
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/cleanup-raw-files.sh

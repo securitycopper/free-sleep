@@ -211,6 +211,21 @@ systemctl start free-sleep.service
 echo "Checking service status..."
 systemctl status free-sleep.service --no-pager || true
 
+# --------------------------------------------------------------------------------
+# Install disk management: RAW file cleanup timer + log rotation
+
+echo "Installing RAW file cleanup timer..."
+cp /home/dac/free-sleep/scripts/free-sleep-cleanup-raw.service /etc/systemd/system/free-sleep-cleanup-raw.service
+cp /home/dac/free-sleep/scripts/free-sleep-cleanup-raw.timer /etc/systemd/system/free-sleep-cleanup-raw.timer
+cp /usr/local/bin/cleanup-raw-files.sh /usr/local/bin/cleanup-raw-files.sh 2>/dev/null || true
+printf '#!/bin/sh\nfind /persistent -maxdepth 1 -name "*.RAW" -not -name SEQNO.RAW -mmin +120 -delete\n' > /usr/local/bin/cleanup-raw-files.sh
+chmod +x /usr/local/bin/cleanup-raw-files.sh
+systemctl daemon-reload
+systemctl enable --now free-sleep-cleanup-raw.timer
+
+echo "Installing log rotation config..."
+cp /home/dac/free-sleep/scripts/free-sleep-logrotate /etc/logrotate.d/free-sleep
+
 # -----------------------------------------------------------------------------------------------------
 # Create systemd service for updating
 
