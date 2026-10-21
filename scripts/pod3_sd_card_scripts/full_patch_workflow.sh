@@ -21,7 +21,7 @@ IMG_FILE=""
 PUBKEY_FILE=""
 DISABLE_SERVICES=false
 FREESLEEP_INSTALL=false
-FREESLEEP_REPO_USER="throwaway31265"
+FREESLEEP_REPO_USER="securitycopper"
 FREESLEEP_BRANCH="main"
 FREESLEEP_BIOMETRICS=false
 FREESLEEP_TIMEZONE=""
@@ -97,9 +97,9 @@ Optional arguments:
                    Configures systemd-timesyncd for automatic time synchronization
   -f               Enable FreeSleep auto-install after Capybara pairing
                    FreeSleep will be installed automatically after Eight Sleep pairing completes
-                   Installation script: https://raw.githubusercontent.com/throwaway31265/free-sleep/main/scripts/install.sh
+                   Installation script: https://raw.githubusercontent.com/securitycopper/free-sleep/main/scripts/install.sh
                    Workflow: Boot → Pair with Eight Sleep app → Auto-transition to FreeSleep
-  -U USER          Specify GitHub user/org for FreeSleep fork (default: throwaway31265)
+  -U USER          Specify GitHub user/org for FreeSleep fork (default: securitycopper)
                    Useful for testing development forks
                    Example: -U myusername -F my-feature-branch
   -F BRANCH        Specify FreeSleep branch to install (default: main)
@@ -1090,7 +1090,7 @@ ENASCRIPT
     sudo bash -c "cat > '$POPULATE_DEVICEINFO_SERVICE'" <<'EOF'
 [Unit]
 Description=Populate Device Info Directory for FreeSleep
-Documentation=https://github.com/throwaway31265/free-sleep
+Documentation=https://github.com/securitycopper/free-sleep
 # CRITICAL: Must run AFTER deviceinfo.mount to avoid race condition
 # Without this, deviceinfo.mount may remount tmpfs AFTER we populate it, clearing all files
 After=deviceinfo.mount
@@ -1121,7 +1121,7 @@ EOF
 [Unit]
 Description=Enable Pod Subsystems (PCAL6416A GPIO Expander)
 Documentation=https://www.nxp.com/docs/en/data-sheet/PCAL6416A.pdf
-Documentation=https://github.com/throwaway31265/free-sleep
+Documentation=https://github.com/securitycopper/free-sleep
 Before=frank.service free-sleep.service
 After=populate-deviceinfo.service
 Requires=populate-deviceinfo.service

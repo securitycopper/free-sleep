@@ -9,8 +9,8 @@
 - ❌ Pod 1 (no SD card, no SSH access)
 - ❌ Pod 2 (no SD card, no SSH access)
 - ❌ Pod 3 eMMC version (non-removable storage, requires different method)
-- ❌ Pod 4 (no SD card, see [free-sleep tutorial](https://github.com/throwaway31265/free-sleep))
-- ❌ Pod 5 (no SD card, see [free-sleep tutorial](https://github.com/throwaway31265/free-sleep))
+- ❌ Pod 4 (no SD card, see [free-sleep tutorial](https://github.com/securitycopper/free-sleep))
+- ❌ Pod 5 (no SD card, see [free-sleep tutorial](https://github.com/securitycopper/free-sleep))
 
 For Pod 3 without SD card or other Pod versions, see the [INSTALLATION.md](../../INSTALLATION.md) file.
 
@@ -603,7 +603,7 @@ wifi_start() {
 
 # FreeSleep Installation
 -f                    # Enable FreeSleep auto-install on first boot
--U USER               # GitHub user/org for FreeSleep fork (default: throwaway31265)
+-U USER               # GitHub user/org for FreeSleep fork (default: securitycopper)
                       # Useful for testing development forks
 -F BRANCH             # FreeSleep branch to install (default: main)
 -B                    # Enable biometrics after FreeSleep installation
@@ -919,7 +919,7 @@ timedatectl show-timesync
 1. Service waits for network connectivity (pings 8.8.8.8, max 120 seconds)
 2. Downloads install script from GitHub:
    - `https://raw.githubusercontent.com/{USER}/free-sleep/{BRANCH}/scripts/install.sh`
-   - Default: `throwaway31265/free-sleep/main`
+   - Default: `securitycopper/free-sleep/main`
    - Customizable with `-U USER` and `-F BRANCH` flags
 3. Runs installation script which:
    - Installs Volta (Node.js version manager)
