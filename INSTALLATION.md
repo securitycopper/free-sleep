@@ -3,20 +3,25 @@
 ## Compatability
 - Pod 1 - ❌ **NOT COMPATIBLE**
 - Pod 2 - ❌ **NOT COMPATIBLE**
+
+
 - Pod 3 - **(With SD card)** - ✅  _most people who have tried this have gotten it working_
-  - Option 1:
-    - Follow the steps [here](https://blopker.com/writing/04-zerosleep-1/) to get root
-    - Start from step 11 **(SKIP step 12)**
-    - It's important you run step 11 ASAP after you ssh in, or else your pod will auto update firmware and kick you out
-  - Option 2:
-    - Try [this script](https://github.com/Pixel-Meister/freesleep_script/blob/main/modify_eight_sleep.sh) to modify 8 sleeps SD card (I have not personally tested this) 
+  - **USE LINUX FOR THIS**
+    - Option 1:
+      - Follow the steps [here](https://blopker.com/writing/04-zerosleep-1/) to get root
+      - Start from step 11 **(SKIP step 12)**
+      - It's important you run step 11 ASAP after you ssh in, or else your pod will auto update firmware and kick you out
+    - Option 2:
+      - Try [this script](https://github.com/Pixel-Meister/freesleep_script/blob/main/modify_eight_sleep.sh) to modify 8 sleeps SD card (I have not personally tested this)
+
+
 - Pod 3 - **(No SD card)** - ✅ FCC ID: 2AYXT61100001 (The FCC ID is located in the back of the pod where you plug in the water tubes)
 - Pod 4 ✅
 - Pod 5 ✅
 
 
 ## Tools required
-- [TC2070-IDC ($50)](https://www.tag-connect.com/product/tc2070-idc)
+- [TC2070-IDC ($50)](https://www.tag-connect.com/product/tc2070-idc) - You can also solder the 3 required wires to the JTAG header instead
 - [FTDI FT232RL ($13)](https://www.amazon.com/gp/product/B07TXVRQ7V/)
 - [Dupont wires ($7)](https://www.amazon.com/Elegoo-EL-CP-004-Multicolored-Breadboard-arduino/dp/B01EV70C78)
 - PSA - The instructions contained here are specific to mac and linux. If you have Windows, you'll have to figure that out yourself (it's do-able, I just refuse to use Windows)
@@ -33,16 +38,13 @@
 ---
 # Installation Steps
 
-## 1. Reset firmware
 
-1. Reset the firmware for your device
-    1. [Pod 3](docs/pod_3_teardown/6_firmware_reset.jpeg)
-    1. [Pod 4](docs/pod_4_teardown/3_reset_firmware.png)
+## 1. Access the circuit board
+1. **Pod 5 users only**: you must first setup your pod with the 8 sleep app, then proceed
 1. Follow the steps to teardown your device and get access to the circuit board
    1. [Pod 3](docs/pod_3_teardown) 
    1. [Pod 4](docs/pod_4_teardown)
        1. [Pod 4 written instructions](docs/pod_4_teardown/instructions.md)
-1. **For troubleshooting or debugging issues:** do step 2, 3 then step 1 while you have the minicom connection setup 
 
 ---
 
@@ -148,7 +150,7 @@ reboot -f
 ---
 
 ## 10. Login as root with the password we set
-On the pod 4, this screen will be slightly different, that's OK
+On the pod 4 & 5, this screen will be slightly different, that's OK
 
 ![Login](docs/installation/3_login.png)
 
@@ -248,31 +250,16 @@ http://192.168.1.50:3000/
 4. Using the free-sleep site, set a temperature. (I would suggest the highest temp on one side and the lowest temp on the other side)
 5. Physically verify the temps change (lay on the cover, use a thermometer, whatever)
 6. If the temps change, you're all set! 
-7. If it's not working
-   1. Create an issue in GitHub with the output from your minicom session
-   2. Login as root to your device with your minicom session again and paste the output of these commands
+7. If it's not working, reach out in Discord and share the output of `fs-debug`
+
+## 18. Add an ssh config
+- This will ask for a public key, ssh access is on port 8822 (ex: `ssh root@<POD_IP> -p 8822')
+- This allows you to set up remote access to your Pod
 ```
-systemctl list-units --type=service --no-pager
-journalctl -u free-sleep --no-pager --output=cat -n 300
-journalctl -u free-sleep-stream --no-pager --output=cat -n 100
-ps aux
-find /home/dac/free-sleep/server -path /home/dac/free-sleep/server/node_modules -prune -o -type f -print
-which npm
-node -v
-which node
-node -v
-iptables -L
+sh /home/dac/free-sleep/scripts/setup_ssh.sh
 ```
 
-
-You can view logs with `journalctl -u free-sleep --no-pager --output=cat` 
-I will eventually add a shell script to execute to upgrade free-sleep. Feel free to create pull requests to add new features or fix bugs. Thanks! 
-
-
-
----
-
-## 19. (Optional) - Add firewall rules to block access to the internet (optional, but recommended)
+## 19. Add firewall rules to block access to the internet (optional, but recommended)
 ```
 sh /home/dac/free-sleep/scripts/block_internet_access.sh
 
@@ -280,12 +267,11 @@ sh /home/dac/free-sleep/scripts/block_internet_access.sh
 sh /home/dac/free-sleep/scripts/unblock_internet_access.sh
 ```
 
----
 
-
-## 20. (Optional) - Add an ssh config
-This will ask for a public key, ssh access is on port 8822 (ex: `ssh root@<POD_IP> -p 8822') 
-```
-sh /home/dac/free-sleep/scripts/setup_ssh.sh
-```
-
+#### Free sleep commands available (run this in the terminal through an SSH session on your pod)
+- `fs-debug` - Prints a debug report  for the pod & free sleep
+- `fs-restart` - Restarts the free sleep service
+- `fs-reset-db` - Deletes the biometrics DB and recreates it (helpful for corrupted DB files)
+- `fs-reset` - Wipes free-sleep data and does a fresh install (can fix corrupted DB or issues switching from beta branch to main branch (requires confirmation in a prompt before executing)
+- `fs-update` - Manually runs the update script
+- `fs-dev-server` - Run express server with nodemon (for devs)

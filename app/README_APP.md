@@ -10,7 +10,23 @@ The app uses Material-UI for styling and layout, Zustand for state management, a
 1. **Optional**: If you also want to make changes to the back-end server at the same time, setup the back-end server to run in hot reload mode [server/README_SERVER.md](../server/README_SERVER.md#Developing)
 1. Run vite hot reloading & specify the IP address for your Pod. This tells axios to make API requests at a different IP (see [app/src/api/api.ts](app/src/api/api.ts))
 - `VITE_POD_IP=<YOUR_POD_IP> npm run dev`
-- `VITE_POD_IP=192.168.1.50 npm run dev`
+- `VITE_POD_IP=192.168.50.231 npm run dev`
+
+## Dependency upgrades
+
+Use Node 24, matching `.nvmrc` and the pinned Volta runtime. After changing dependencies,
+run `npx tsc -b`, `npm run lint`, and `npm run build:demo`. Preview the demo with
+`VITE_ENV=demo npm run preview` so Vite serves `app/dist`.
+
+These major upgrades are intentionally deferred:
+
+- ESLint 10: `eslint-plugin-react` currently supports ESLint through v9. Wait for
+  plugin support or migrate the React lint rules together.
+- Zod 4: app schemas re-export server schemas using Zod 3. Migrate both packages
+  and their validation behavior together.
+- TypeScript 7: `typescript-eslint` currently requires TypeScript below 6.1. The app
+  explicitly uses the existing TypeScript 5.9 compiler until a coordinated upgrade.
+- Node 26 types: keep `@types/node` on v24 while the runtime remains Node 24.
 
 ---
 

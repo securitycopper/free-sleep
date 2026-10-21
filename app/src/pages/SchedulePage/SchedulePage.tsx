@@ -4,7 +4,7 @@ import { Box } from '@mui/material';
 import { DeepPartial } from 'ts-essentials';
 import moment from 'moment-timezone';
 
-import AlarmAccordion from './AlarmAccordion.tsx';
+import AlarmAccordion from './AlarmSection/AlarmAccordion.tsx';
 import ApplyToOtherDaysAccordion from './ApplyToOtherDaysAccordion.tsx';
 import DayTabs from './DayTabs.tsx';
 import EnabledSwitch from './EnabledSwitch.tsx';
@@ -22,6 +22,7 @@ import { useSettings } from '@api/settings';
 import { LOWERCASE_DAYS } from './days.ts';
 import TemperatureScheduleChart from './ScheduleChart.tsx';
 import ErrorBoundary from '@components/ErrorBoundary.tsx';
+import PageHeader from '@components/PageHeader.tsx';
 
 
 const getAdjustedDayOfWeek = (): DayOfWeek => {
@@ -100,11 +101,11 @@ export default function SchedulePage() {
     <PageContainer
       sx={ {
         width: '100%',
-        maxWidth: { xs: '100%', sm: '800px' },
         mx: 'auto',
-        mb: 15,
+        maxWidth: 800,
       } }
     >
+      <PageHeader title="Schedules"/>
       <SideControl/>
 
       <DayTabs/>

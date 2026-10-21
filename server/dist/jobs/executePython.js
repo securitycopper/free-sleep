@@ -1,11 +1,15 @@
 
-!function(){try{var e="undefined"!=typeof window?window:"undefined"!=typeof global?global:"undefined"!=typeof globalThis?globalThis:"undefined"!=typeof self?self:{},n=(new e.Error).stack;n&&(e._sentryDebugIds=e._sentryDebugIds||{},e._sentryDebugIds[n]="f21ab786-7037-58c8-a3bd-6d56b45c70f7")}catch(e){}}();
+!function(){try{var e="undefined"!=typeof window?window:"undefined"!=typeof global?global:"undefined"!=typeof globalThis?globalThis:"undefined"!=typeof self?self:{},n=(new e.Error).stack;n&&(e._sentryDebugIds=e._sentryDebugIds||{},e._sentryDebugIds[n]="eb7e8dfc-98db-5983-a1a6-ed6b436fae4d")}catch(e){}}();
 import logger from '../logger.js';
 import { exec } from 'child_process';
 import fs from 'fs';
-export const executePythonScript = ({ script, args = [] }) => {
+const { promises: fsPromises } = fs;
+export const executePythonScript = async ({ script, args = [] }) => {
     const pythonExecutable = '/home/dac/venv/bin/python';
-    if (!fs.existsSync(pythonExecutable)) {
+    try {
+        await fsPromises.access(pythonExecutable, fs.constants.X_OK);
+    }
+    catch {
         logger.debug(`Not executing python script, ${pythonExecutable} does not exist!`);
         return;
     }
@@ -25,4 +29,4 @@ export const executePythonScript = ({ script, args = [] }) => {
     });
 };
 //# sourceMappingURL=executePython.js.map
-//# debugId=f21ab786-7037-58c8-a3bd-6d56b45c70f7
+//# debugId=eb7e8dfc-98db-5983-a1a6-ed6b436fae4d

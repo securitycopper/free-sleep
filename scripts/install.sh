@@ -10,11 +10,27 @@ REPO_DIR="/home/dac/free-sleep"
 SERVER_DIR="$REPO_DIR/server"
 USERNAME="dac"
 
+# Stop both services before replacing code or touching the database. Restore them on failure too.
+services_to_restore=""
+restore_services() {
+  for service_name in $services_to_restore; do
+    systemctl start "$service_name" || true
+  done
+}
+trap restore_services EXIT
+for service_name in free-sleep-stream free-sleep; do
+  if systemctl is-active --quiet "$service_name"; then
+    services_to_restore="$service_name $services_to_restore"
+    systemctl stop "$service_name"
+  fi
+done
+
 # --------------------------------------------------------------------------------
 # Download the repository
 echo "Downloading the repository..."
 curl -L -o "$ZIP_FILE" "$REPO_URL"
 
+echo ""
 echo "Unzipping the repository..."
 unzip -o -q "$ZIP_FILE"
 echo "Removing the zip file..."
@@ -28,11 +44,17 @@ mv free-sleep-main "$REPO_DIR"
 
 chown -R "$USERNAME":"$USERNAME" "$REPO_DIR"
 
+# Synchronize installed biometrics before restarting services. Old updaters also
+# download this installer, so this repairs environments created before new dependencies.
+if [ -x /home/dac/venv/bin/python ]; then
+  sh "$REPO_DIR/scripts/install_python_packages.sh"
+fi
+
 # --------------------------------------------------------------------------------
 # Install or update Volta
 # - We check once. If it’s not installed, install it.
 echo "Checking if Volta is installed for user '$USERNAME'..."
-if sudo -u "$USERNAME" bash -c 'command -v volta' > /dev/null 2>&1; then
+if [ -d "/home/$USERNAME/.volta" ]; then
   echo "Volta is already installed for user '$USERNAME'."
 else
   echo "Volta is not installed. Installing for user '$USERNAME'..."
@@ -42,7 +64,10 @@ else
     echo -e '\nexport VOLTA_HOME="/home/dac/.volta"\nexport PATH="$VOLTA_HOME/bin:$PATH"\n' \
       >> "/home/$USERNAME/.profile"
   fi
+  echo "Finished installing Volta"
+  echo ""
 fi
+
 
 # --------------------------------------------------------------------------------
 # Install (or update) Node via Volta
@@ -54,8 +79,26 @@ sudo -u "$USERNAME" bash -c "source /home/$USERNAME/.profile && volta install no
 mkdir -p /persistent/free-sleep-data/logs/
 mkdir -p /persistent/free-sleep-data/lowdb/
 
-# Extract the DAC_SOCKET path from frank.sh (if present) and put it in DAC_SOCK_PATH file
-grep -oP '(?<=DAC_SOCKET=)[^ ]*dac.sock' /opt/eight/bin/frank.sh > /persistent/free-sleep-data/dac_sock_path.txt
+SRC_FILE="/opt/eight/bin/frank.sh"
+DEST_FILE="/persistent/free-sleep-data/dac_sock_path.txt"
+
+if [ -f "$DEST_FILE" ]; then
+  echo "Destination file $DEST_FILE already exists, skipping copy."
+else
+  if [ -r "$SRC_FILE" ]; then
+    echo "Found $SRC_FILE, searching for dac.sock path..."
+    result=$(grep -oP '(?<=DAC_SOCKET=)[^ ]*dac\.sock' "$SRC_FILE" || true)
+    if [ -n "$result" ]; then
+      echo "$result" > "$DEST_FILE"
+      echo "DAC socket path saved to $DEST_FILE"
+    else
+      echo "No dac.sock path found in $SRC_FILE, skipping write."
+    fi
+  else
+    echo "File $SRC_FILE not found or not readable, skipping."
+  fi
+fi
+
 
 # DO NOT REMOVE, OLD VERSIONS WILL LOSE settings & schedules
 FILES_TO_MOVE=(
@@ -93,6 +136,7 @@ NEW_PATH="/home/dac/free-sleep/server/package-lock.json"
 NODE_MODULES_BACKUP="/home/dac/free-sleep-backup/server/node_modules"
 NODE_MODULES_NEW="/home/dac/free-sleep/server/node_modules"
 
+echo "Reviewing npm dependencies for changes..."
 if [ -f "$BACKUP_PATH" ] && [ -f "$NEW_PATH" ]; then
   BACKUP_HASH=$(sha256sum "$BACKUP_PATH" | awk '{print $1}')
   NEW_HASH=$(sha256sum "$NEW_PATH" | awk '{print $1}')
@@ -118,37 +162,24 @@ else
   echo "One or both package-lock.json files missing, running npm install..."
   sudo -u "$USERNAME" bash -c "cd '$SERVER_DIR' && /home/$USERNAME/.volta/bin/npm install"
 fi
+echo ""
 
 # --------------------------------------------------------------------------------
 # Run Prisma migrations
 
-# Stop the free-sleep-stream service if it was running
-# This is needed to close out the lock files for the SQLite file
-biometrics_enabled="false"
-if systemctl is-active --quiet free-sleep-stream && systemctl list-unit-files | grep -q "^free-sleep-stream.service"; then
-  biometrics_enabled="true"
-  echo "Stopping biometrics service..."
-  systemctl stop free-sleep-stream
-  sleep 5
-fi
 
 SRC="/persistent/free-sleep-data/free-sleep.db"
 DEST="/persistent/free-sleep-data/free-sleep-copy.db"
 
 if [ -f "$SRC" ]; then
-  cp "$SRC" "$DEST"
-  echo "Making a backup up database prior to migrations"
-  echo "Database copied to $DEST"
+  echo "Verifying and backing up the database prior to migrations..."
+  python3 "$REPO_DIR/scripts/sqlite_maintenance.py" backup "$SRC" "$DEST" --checkpoint
 else
   echo "Source database not found, skipping copying database."
 fi
 
 
 
-
-rm -f /persistent/free-sleep-data/free-sleep.db-shm \
-      /persistent/free-sleep-data/free-sleep.db-wal \
-      /persistent/free-sleep-data/free-sleep.db-journal
 
 migration_failed="false"
 
@@ -161,11 +192,7 @@ else
 fi
 
 
-# Restart free-sleep-stream if it was running before
-if [ "$biometrics_enabled" = "true" ]; then
-  echo "Restarting free-sleep-stream service..."
-  systemctl restart free-sleep-stream
-fi
+echo ""
 
 # --------------------------------------------------------------------------------
 # Create systemd service
@@ -208,8 +235,15 @@ systemctl stop swupdate 2>/dev/null || true
 echo "Starting free-sleep.service..."
 systemctl start free-sleep.service
 
-echo "Checking service status..."
+# Recover an enabled streamer even if it was already failing before the update.
+if systemctl is-enabled --quiet free-sleep-stream.service; then
+  systemctl reset-failed free-sleep-stream.service
+  systemctl restart free-sleep-stream.service
+fi
+
+echo "Checking free-sleep service status..."
 systemctl status free-sleep.service --no-pager || true
+echo ""
 
 # --------------------------------------------------------------------------------
 # Install disk management: RAW file cleanup timer + log rotation
@@ -278,11 +312,12 @@ else
   echo -e "\033[0;33mWARNING: Unable to retrieve date from Google... Skipping time update.\033[0m"
 fi
 
+echo ""
 # --------------------------------------------------------------------------------
 # Setup passwordless sudo scripts for dac user
 
 SUDOERS_FILE="/etc/sudoers.d/$USERNAME"
-
+echo "Setting up sudoers rules..."
 # Reboot
 SUDOERS_RULE="$USERNAME ALL=(ALL) NOPASSWD: /sbin/reboot"
 if sudo grep -Fxq "$SUDOERS_RULE" "$SUDOERS_FILE" 2>/dev/null; then
@@ -304,6 +339,21 @@ else
 fi
 chmod 755 /home/dac/free-sleep/scripts/update_service.sh
 
+# Keep the update guard outside the downloaded checkout, including across older installers.
+MAINTENANCE_DIR="/persistent/free-sleep-maintenance"
+mkdir -p "$MAINTENANCE_DIR" /etc/systemd/system/free-sleep-update.service.d
+cp "$REPO_DIR/scripts/update_service.sh" "$MAINTENANCE_DIR/update_service.sh"
+cp "$REPO_DIR/scripts/sqlite_maintenance.py" "$MAINTENANCE_DIR/sqlite_maintenance.py"
+chown -R root:root "$MAINTENANCE_DIR"
+chmod 755 "$MAINTENANCE_DIR" "$MAINTENANCE_DIR/update_service.sh"
+chmod 644 "$MAINTENANCE_DIR/sqlite_maintenance.py"
+cat > /etc/systemd/system/free-sleep-update.service.d/sqlite-maintenance.conf <<EOF
+[Service]
+ExecStart=
+ExecStart=$MAINTENANCE_DIR/update_service.sh
+EOF
+systemctl daemon-reload
+
 
 # Biometrics enablement
 SUDOERS_BIOMETRICS_RULE="$USERNAME ALL=(ALL) NOPASSWD: /bin/sh /home/dac/free-sleep/scripts/enable_biometrics.sh"
@@ -316,6 +366,8 @@ else
 fi
 
 echo ""
+
+sh /home/dac/free-sleep/scripts/add_shortcuts.sh
 
 # --------------------------------------------------------------------------------
 # Finish

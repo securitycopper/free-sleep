@@ -1,14 +1,14 @@
 import moment from 'moment-timezone';
 import { useServerStatus } from '@api/serverStatus.ts';
 import {
+  Box,
   CircularProgress,
-  Stack,
   Typography,
 } from '@mui/material';
-import Grid from '@mui/material/GridLegacy';
 
 import PageContainer from '../PageContainer.tsx';
-import StatusCard from './StatusCard.tsx';
+import PageHeader from '@components/PageHeader.tsx';
+import StatusRow from './StatusRow.tsx';
 import { ServerStatusKey, StatusInfo } from '@api/serverStatusSchema.ts';
 
 export default function StatusPage() {
@@ -16,46 +16,41 @@ export default function StatusPage() {
   const updatedAt = moment(dataUpdatedAt);
   const formatted = updatedAt.format('YYYY-MM-DD HH:mm:ss z');
   return (
-    <PageContainer
-      sx={ {
-        width: '100%',
-        maxWidth: { xs: '100%', sm: '800px' },
-        mx: 'auto',
-        mb: 15,
-      } }
-    >
-      <Stack spacing={ 1 } alignItems="center">
-        <Typography variant="h5" fontWeight={ 800 }>
-          Server Status
-        </Typography>
+    <PageContainer sx={ { width: '100%', maxWidth: 760, mx: 'auto' } }>
+      <Box>
+        <PageHeader title="Server Status"/>
         <Typography
-          variant="body2"
+          variant="caption"
           sx={ {
-            color: (t) => t.palette.text.secondary,
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
-            minHeight: 24,
-          } }
-        >
+            color: 'text.secondary',
+            display: 'block',
+            mt: 1,
+            fontVariantNumeric: 'tabular-nums',
+            overflowWrap: 'anywhere'
+          } }>
           Updated at: { formatted }
         </Typography>
-      </Stack>
+      </Box>
       { isLoading && <CircularProgress /> }
 
       {
         data && (
-          <Grid container spacing={ 2.5 } sx={ { mt: 1 } }>
+          <Box
+            component="ul"
+            aria-label="Service status"
+            sx={ { listStyle: 'none', m: 0, p: 0, borderTop: '1px solid', borderColor: 'divider' } }
+          >
             {
               // @ts-expect-error
               Object.keys(data).map((job: ServerStatusKey) => (
-                <StatusCard
+                <StatusRow
                   key={ job }
                   job={ job }
                   statusInfo={ data[job] as StatusInfo }
                 />
               ))
             }
-          </Grid>
+          </Box>
         )
 
       }

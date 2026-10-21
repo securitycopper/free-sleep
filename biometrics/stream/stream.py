@@ -21,6 +21,7 @@ import sys
 import platform
 import cbor2
 from datetime import datetime, timedelta
+import asyncio
 
 if platform.system().lower() == 'linux':
     sys.path.append('/home/dac/free-sleep/biometrics/')
@@ -34,14 +35,77 @@ import queue
 import threading
 
 from get_logger import get_logger
+if __name__ == '__main__':
+    # Give time for the express.js server to boot.
+    print('Sleeping for 30 seconds before starting stream service...')
+    time.sleep(30)
 logger = get_logger('free-sleep-stream')
 
 from stream_processor import StreamProcessor
 from load_raw_files import load_piezo_row
+from raw_records import read_raw_record
 from service_health import update_health
+from nats_client import is_nats_running, load_nats_client
 
 # Global queue for processing decoded biometric data
 piezo_record_queue = queue.Queue()
+
+
+# When NATS is running, we can listen directly for incoming data and send it to the legacy pipeline
+async def watch_jetstream_directly():
+    """Consumes CBOR metrics from JetStream and mirrors LatestRawFileHandler logic."""
+    logger.info('NATS detected! Listening for sensor data in real-time...')
+    update_health('stream', 'started', '')
+    # Track active NATS Connection
+    nc = None
+
+    try:
+        nats, nats_api = load_nats_client()
+        nc = await nats.connect("nats://127.0.0.1:4222")
+        js = nc.jetstream()
+
+        # Only listen to piezo records for processing
+        sub = await js.subscribe("raw.sens.piezo", stream="raw", config=nats_api.ConsumerConfig(
+            deliver_policy=nats_api.DeliverPolicy.NEW
+        ))
+
+        while True:
+            msg = await sub.next_msg(timeout=None)
+            
+            try:
+                decoded_data = cbor2.loads(msg.data) 
+                
+                if not isinstance(decoded_data, dict) or decoded_data.get('type') != 'piezo-dual':
+                    await msg.ack()
+                    continue
+                # Side is not used, but must be 'left' or 'right' to call
+                load_piezo_row(decoded_data, 'right')
+                piezo_record_queue.put(decoded_data)
+
+            except Exception as parse_err:
+                logger.error(f"Failed to process NATS/CBOR record payload: {parse_err}")
+
+            await msg.ack()
+
+    except asyncio.CancelledError:
+        logger.info("NATS task execution cancelled.")
+    except Exception as error:
+        logger.error(f"NATS Stream encountered an error: {error}")
+        update_health('stream', 'failed', repr(error))
+        raise error
+    finally:
+        if nc is not None and nc.is_connected:
+            await nc.close()
+
+
+def _safe_getmtime(path: str) -> float:
+    try:
+        if os.path.exists(path):
+            return os.path.getmtime(path)
+    except FileNotFoundError:
+        logger.warning(f'File path not found, ignoring... {path}')
+        pass
+    return 0  # Default for missing files
 
 
 class LatestRawFileHandler(FileSystemEventHandler):
@@ -61,7 +125,11 @@ class LatestRawFileHandler(FileSystemEventHandler):
             return
 
         # Get the latest file by modification time
-        raw_files.sort(key=lambda f: os.path.getmtime(os.path.join(self.directory, f)), reverse=True)
+        raw_files.sort(
+            key=lambda f: _safe_getmtime(os.path.join(self.directory, f)),
+            reverse=True
+        )
+
         latest_file = os.path.join(self.directory, raw_files[0])
 
         if latest_file != self.latest_file:
@@ -93,33 +161,39 @@ class LatestRawFileHandler(FileSystemEventHandler):
 
         while True:
             try:
-                # Decode CBOR object from a **single line**
-                row = cbor2.load(self.latest_file_obj)  # Load the next CBOR object
-                one_minute_ago = datetime.now() - timedelta(minutes=2)
-
-                if 'data' in row:  # Check if 'data' key exists
-                    decoded_data = cbor2.loads(row['data'])
-                    if decoded_data['type'] != 'piezo-dual':
-                        continue
-                    record_time = datetime.fromtimestamp(decoded_data['ts'])
-                    if one_minute_ago > record_time:
-                        continue
-                    load_piezo_row(decoded_data, 'right')
-                    piezo_record_queue.put(decoded_data)
-
-                # Update last read position
-                self.last_pos = self.latest_file_obj.tell()
-
+                payload = read_raw_record(self.latest_file_obj)
             except EOFError:
-                # No more CBOR objects to read
+                # Retry an incomplete wrapper after the firmware appends more bytes.
+                self.latest_file_obj.seek(self.last_pos)
                 break
-            except Exception as e:
-                logger.error(f"Error decoding CBOR: {e}")
+            except Exception as error:
+                logger.error(f"Error reading RAW record: {error}")
+                self.latest_file_obj.seek(self.last_pos)
                 break
+
+            # Commit every complete wrapper, including skipped or malformed payloads.
+            self.last_pos = self.latest_file_obj.tell()
+            if payload is None:
+                continue
+
+            try:
+                decoded_data = cbor2.loads(payload)
+                if not isinstance(decoded_data, dict) or decoded_data.get('type') != 'piezo-dual':
+                    continue
+                recent_cutoff = datetime.now() - timedelta(minutes=2)
+                record_time = datetime.fromtimestamp(decoded_data['ts'])
+                if recent_cutoff > record_time:
+                    continue
+                load_piezo_row(decoded_data, 'right')
+                piezo_record_queue.put(decoded_data)
+            except Exception as error:
+                logger.error(f"Error decoding RAW payload: {error}")
 
 
 def process_biometrics():
     piezo_record = piezo_record_queue.get()
+    if piezo_record is None:
+        return
     stream_processor = StreamProcessor(piezo_record, debug=False)
     ix = 0
     while True:
@@ -145,9 +219,9 @@ def process_biometrics():
 
 
 def watch_directory(directory="/persistent"):
-    logger.info('Steam processor starting...')
-    update_health('stream', 'started', '')
     """Monitors the directory for new RAW files and processes only the latest one."""
+    logger.info('Stream processor starting...')
+    update_health('stream', 'started', '')
     handler = LatestRawFileHandler(directory)
     observer = Observer()
     observer.schedule(handler, directory, recursive=False)
@@ -157,7 +231,7 @@ def watch_directory(directory="/persistent"):
     processing_thread = threading.Thread(target=process_biometrics, daemon=True)
     processing_thread.start()
 
-    logger.debug('Steam processor set up successfully, running...')
+    logger.debug('Stream processor set up successfully, running...')
     try:
         while True:
             time.sleep(1)
@@ -174,5 +248,23 @@ def watch_directory(directory="/persistent"):
 
     observer.join()
 
-# Start watching and processing the latest .RAW file
-watch_directory("/persistent")
+if __name__ == '__main__':
+    # Decide whether to listen to NATS stream, or start watching and processing the latest .RAW file
+    if is_nats_running():
+        # Use the same legacy thread logic for processing biometrics
+        processing_thread = threading.Thread(target=process_biometrics, daemon=True)
+        processing_thread.start()
+        try:
+            asyncio.run(watch_jetstream_directly())
+        except KeyboardInterrupt:
+            logger.info("Stopping NATS stream processor...")
+        finally:
+            # Replicate legacy raw file cleanup behavior
+            piezo_record_queue.put(None)
+            processing_thread.join()
+
+    else:
+        try:
+            watch_directory("/persistent/")
+        except KeyboardInterrupt:
+            logger.info("Stopping legacy stream processor...")

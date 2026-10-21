@@ -5,16 +5,34 @@ Express server intended to run on the 8 sleep pod.
 
 ## Developing
 
+### Dependency compatibility
+
+The Pod installer and Volta configuration use Node 24.11.0. Keep runtime dependencies compatible with that version; upgrading packages does not require changing the Pod runtime.
+
+- Prisma CLI and client are pinned together at 6.19.3. Prisma 7 requires a SQLite driver adapter and testing that native dependency on the Pod before migration.
+- Sentry CLI 3 is a development dependency used when building off the Pod; the production server does not execute it.
+- TypeScript is upgraded to 6.0, the newest version supported by typescript-eslint 8. TypeScript 7 changes the compiler API used by linting and ts-node, so that migration needs compatible tooling. Node type definitions stay on major 24 to match the Pod runtime.
+- Zod stays on major 3 to preserve nested partial REST updates and shared frontend types.
+- ESLint 10 uses `eslint.config.js`. Sentry 11 explicitly preserves the previous data-collection restrictions and transaction lifecycle.
+
+After changing dependencies, regenerate the Prisma client and checked-in server output, then check types and lint:
+
+```bash
+npm ci
+npm run generate
+npm run build:pr
+npm run lint
+npx tsc --noEmit
+```
+
+`build:pr` injects source-map debug IDs locally and does not upload to Sentry.
+
 ### Hot Reloading (on Pod) 
 1. SSH into the Pod and run
 ```
-systemctl stop free-sleep
-systemctl disable free-sleep
-su - dac
-cd /home/dac/free-sleep/server && /home/dac/.volta/bin/npm run dev
+fs-dev-server
 
 # When you're done, undo this by CTR+C out of the npm run dev command & run:
-systemctl enable free-sleep
 systemctl start free-sleep
 ```
 2. Run the front-end app with hot reload and point it to your Pod [app/README_APP.md](../app/README_APP.md#Developing)
@@ -28,20 +46,8 @@ systemctl start free-sleep
 1. I have IntelliJ setup to auto upload my file changes to the Pod [IntelliJ documentation for this config](https://www.jetbrains.com/help/idea/tutorial-deployment-in-product.html#downloading).
 VSCode also has a similar feature, I think this is the documentation for it [VSCode](https://code.visualstudio.com/docs/remote/ssh)
 
-
 --- 
 
-
-## Features
-- DOES NOT DEPEND ON INTERNET, if your internet goes out, your device will still run
-- API capabilities
-  - Full control over the temperature
-  - Priming the device
-  - Scheduling on/off
-  - Scheduling temperature changes
-  - Alarm scheduling - (work in progress, NOT COMPLETE)
-
----
 
 ## Architecture
 The server is composed of the following key components:
@@ -91,8 +97,7 @@ The server is composed of the following key components:
 ## Installation
 
 ### Prerequisites
-- Node.js (v16 or higher) - This is not optional, the 8 sleep pod has node v-16.14.2
-- NPM or Yarn
+- Volta for node version control
 
 ### Setup
 1. Clone the repository.
@@ -129,13 +134,3 @@ server/
 ```
 
 ---
-
-
-## License
-This project is licensed under the MIT License. See the `LICENSE.md` file for details.
-
----
-
-## Acknowledgments
-- Huge thanks to [@bobobo1618](https://github.com/bobobo1618) & their research on how the device is controlled via dac.sock
-

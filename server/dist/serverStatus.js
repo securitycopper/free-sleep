@@ -1,5 +1,5 @@
 
-!function(){try{var e="undefined"!=typeof window?window:"undefined"!=typeof global?global:"undefined"!=typeof globalThis?globalThis:"undefined"!=typeof self?self:{},n=(new e.Error).stack;n&&(e._sentryDebugIds=e._sentryDebugIds||{},e._sentryDebugIds[n]="85f063f5-0a87-530f-9bfb-a177bdb60a87")}catch(e){}}();
+!function(){try{var e="undefined"!=typeof window?window:"undefined"!=typeof global?global:"undefined"!=typeof globalThis?globalThis:"undefined"!=typeof self?self:{},n=(new e.Error).stack;n&&(e._sentryDebugIds=e._sentryDebugIds||{},e._sentryDebugIds[n]="d328a8ca-176d-5106-a415-4ef0bc39212a")}catch(e){}}();
 import { isSystemDateValid } from './jobs/isSystemDateValid.js';
 import servicesDB from './db/services.js';
 import { prisma } from './db/prisma.js';
@@ -33,6 +33,12 @@ class ServerStatus {
                 name: 'Franken sock',
                 status: 'not_started',
                 description: 'Socket service for controlling the hardware',
+                message: '',
+            },
+            frankenMonitor: {
+                name: 'Franken monitor',
+                status: 'not_started',
+                description: 'Handles gestures and monitoring the status',
                 message: '',
             },
             jobs: {
@@ -150,4 +156,4 @@ class ServerStatus {
 }
 export default ServerStatus.getInstance();
 //# sourceMappingURL=serverStatus.js.map
-//# debugId=85f063f5-0a87-530f-9bfb-a177bdb60a87
+//# debugId=d328a8ca-176d-5106-a415-4ef0bc39212a

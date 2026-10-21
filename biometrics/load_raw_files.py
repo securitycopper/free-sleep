@@ -6,13 +6,107 @@ from pathlib import Path
 import gc
 import sys
 import os
+import asyncio
 
 # Add the current directory to sys.path
 sys.path.append(os.getcwd())
 from data_types import *
 from get_logger import get_logger
+from raw_records import read_raw_record
+from capacitance import normalize_capacitance_record
+from nats_client import is_nats_running, load_nats_client
 
 logger = get_logger()
+
+
+# Mapping old payload key strings to the new NATS subjects
+# A list of data streams can be found with 'nats stream subjects raw'
+# raw.log, raw.frz.health, raw.sens.health, raw.frz.temp, raw.sens.bedtemp,
+# raw.sens.piezo, raw.sens.piezo, raw.frz.therm, raw.sens.capsense
+SUBJECT_MAP = {
+    'bedTemp': 'raw.sens.bedtemp',
+    'capSense': 'raw.sens.capsense',
+    'frzTemp': 'raw.frz.temp',
+    'log': 'raw.log',
+    'piezo-dual': 'raw.sens.piezo'
+}
+
+
+async def _fetch_jetstream_historical_data(start_time: datetime, end_time: datetime, raw_data_types: list, side: Side, sensor_count: int) -> dict:
+    """Connects to JetStream and fetches historical messages inside the time window."""
+    nats, nats_api = load_nats_client()
+    nc = None
+    # Initialize dictionary keys exactly matching raw_data_types (e.g. 'piezo-dual', 'capSense' for analyze sleep)
+    extracted_data = {field: [] for field in raw_data_types}
+        
+    try:
+        # Connect to the NATS JetStream Server to request data logs
+        nc = await nats.connect("nats://127.0.0.1:4222")
+        js = nc.jetstream()
+
+        for field in raw_data_types:
+            subject = SUBJECT_MAP.get(field)
+            if not subject:
+                continue
+            
+            try:
+                # Request logs for the data type using the start time provided
+                sub = await js.subscribe(
+                    subject, 
+                    stream="raw", 
+                    config=nats_api.ConsumerConfig(
+                        deliver_policy=nats_api.DeliverPolicy.BY_START_TIME,
+                        opt_start_time=start_time
+                    )
+                )
+
+                while True:
+                    try:
+                        msg = await sub.next_msg(timeout=0.5)
+                    except asyncio.TimeoutError:
+                        break
+
+                    try:
+                        decoded_record = cbor2.loads(msg.data)
+                        if not isinstance(decoded_record, dict):
+                            continue
+                        decoded_record = normalize_capacitance_record(decoded_record)
+                        if decoded_record.get('type') != field:
+                            continue
+                        raw_ts = datetime.fromtimestamp(decoded_record['ts'], timezone.utc)
+                        if raw_ts >= end_time:
+                            break
+                        if raw_ts < start_time:
+                            continue
+                        # This only uses 1 sensor count during analyze sleep, which avoids an issue with dropping dumplicates in sleep_detector.
+                        # Numpy should probably drop duplicate ndarrays instead of pandas failing on it.
+                        # Ideally we should also filter out the other side instead of adding it in the first place.
+                        _delete_other_side(decoded_record, side, sensor_count)
+                        if field == 'piezo-dual':
+                            # Load only the side we're checking and process it
+                            load_piezo_row(decoded_record, side)
+
+                        # Adjust timestamp in the same way as the legacy pipeline
+                        decoded_record['ts'] = datetime.fromtimestamp(
+                                            decoded_record['ts'],
+                                            timezone.utc
+                                        ).strftime("%Y-%m-%d %H:%M:%S")
+                        extracted_data[field].append(decoded_record)
+                    except Exception as error:
+                        # One malformed message must not discard the rest of the subscription.
+                        logger.error(f'Invalid {field} record: {error}')
+                    finally:
+                        await msg.ack()
+            except Exception as sub_err:
+                logger.error(f"Failed to fetch JetStream data for {field}: {sub_err}")
+                
+    except Exception as err:
+        logger.error(f"NATS Connection error inside load_raw_files: {err}")
+    finally:
+        if nc is not None and nc.is_connected:
+            await nc.close()
+            
+    return extracted_data
 
 
 def get_current_files(folder_path: str):
@@ -49,9 +143,7 @@ def _delete_other_side(decoded_data: dict, side: Side, sensor_count: int):
         if side == 'left':
             del_side = 'right'
 
-        if decoded_data['type'] == 'capSense':
-            del decoded_data[del_side]
-        else:
+        if decoded_data['type'] == 'piezo-dual':
             if sensor_count == 1:
                 # Delete sensor 2 of the current side
                 if f'{side}2' in decoded_data:
@@ -60,6 +152,8 @@ def _delete_other_side(decoded_data: dict, side: Side, sensor_count: int):
             del decoded_data[f'{del_side}1']
             if f'{del_side}2' in decoded_data:
                 del decoded_data[f'{del_side}2']
+        else:
+            decoded_data.pop(del_side, None)
     except Exception as error:
         logger.error(error)
         traceback.print_exc()
@@ -74,11 +168,24 @@ def _decode_cbor_file(file_path: str, data: dict, start_time, end_time, side: Si
     with open(file_path, 'rb') as raw_data:
         while True:
             try:
+                payload = read_raw_record(raw_data)
+            except EOFError:
+                # read_raw_record normalizes partial CBOR wrappers to EOFError.
+                break
+            except Exception as error:
+                # A damaged wrapper has no reliable boundary for the next record.
+                logger.error(error)
+                break
 
-                # Decode the next CBOR object
-                row = cbor2.load(raw_data)
-                decoded_data = cbor2.loads(row['data'])
-                if not decoded_data['type'] in load_raw_types:
+            if payload is None:
+                continue
+
+            try:
+                decoded_data = cbor2.loads(payload)
+                if not isinstance(decoded_data, dict):
+                    continue
+                decoded_data = normalize_capacitance_record(decoded_data)
+                if decoded_data.get('type') not in load_raw_types:
                     continue
                 _delete_other_side(decoded_data, side, sensor_count)
                 if not checked_timespan:
@@ -105,9 +212,8 @@ def _decode_cbor_file(file_path: str, data: dict, start_time, end_time, side: Si
                 ).strftime("%Y-%m-%d %H:%M:%S")
                 data[decoded_data['type']].append(decoded_data)
 
-            except EOFError:
-                break
             except Exception as error:
+                # The wrapper was complete, so a bad payload can be skipped safely.
                 logger.error(error)
         raw_data.close()
         gc.collect()
@@ -141,21 +247,27 @@ def load_raw_files(folder_path: str, start_time: datetime, end_time: datetime, s
         if raw_data_types is None:
             raw_data_types = ['bedTemp', 'capSense', 'frzTemp', 'log', 'piezo-dual']
 
-        for field in raw_data_types:
-            data[field] = []
-        logger.info(f'Loading RAW files from {folder_path} | {start_time.isoformat()} -> {end_time.isoformat()}')
+        # If NATS is running we grab data from JetStream records stored in /persistent/jetstream
+        if is_nats_running():
+            logger.info("NATS detected! Fetching data from JetStream store...")
+            data = asyncio.run(_fetch_jetstream_historical_data(start_time, end_time, raw_data_types, side, sensor_count))
+            logger.info("Data fetched from JetStream store successfully.")
+        else:
+            for field in raw_data_types:
+                data[field] = []
+            logger.info(f'Loading RAW files from {folder_path} | {start_time.isoformat()} -> {end_time.isoformat()}')
 
-        file_paths = get_current_files(folder_path)
+            file_paths = get_current_files(folder_path)
 
-        if len(file_paths) == 0:
-            logger.error('No file paths detected!')
-            raise FileNotFoundError(f'No files found for: {folder_path}! Is internet blocked?')
+            if len(file_paths) == 0:
+                logger.error('No file paths detected!')
+                raise FileNotFoundError(f'No files found for: {folder_path}! Is internet blocked?')
 
-        for file_path in file_paths:
-            if os.path.isfile(file_path):
-                _decode_cbor_file(file_path, data, start_time, end_time, side, sensor_count)
-            else:
-                logger.warning(f'File path deleted before parsed! {file_path}')
+            for file_path in file_paths:
+                if os.path.isfile(file_path):
+                    _decode_cbor_file(file_path, data, start_time, end_time, side, sensor_count)
+                else:
+                    logger.warning(f'File path deleted before parsed! {file_path}')
 
         _rename_keys(data)
         data_found = False

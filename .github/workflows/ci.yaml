@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  pull_request:
+
+jobs:
+  biometrics:
+    name: Biometrics (Python ${{ matrix.python-version }}, cbor2 ${{ matrix.cbor-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - python-version: '3.9'
+            cbor-version: '5.6.5'
+          - python-version: '3.10'
+            cbor-version: '5.8.0'
+          - python-version: '3.10'
+            cbor-version: '6.1.5'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install biometrics dependencies
+        run: python -m pip install -r biometrics/requirements.txt "cbor2==${{ matrix.cbor-version }}"
+      - name: Test biometrics
+        run: python -m unittest discover -s biometrics/tests -v
+      - name: Test maintenance and dependency installation
+        run: python -m unittest discover -s scripts/tests -v
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+          cache-dependency-path: |
+            ./app/package-lock.json
+            ./server/package-lock.json
+
+      - name: Install dependencies (app)
+        working-directory: app
+        run: npm ci
+
+      - name: Install dependencies (server)
+        working-directory: server
+        run: npm ci
+
+      - name: Generate Prisma client
+        working-directory: server
+        run: npm run generate
+
+      - name: Build (server)
+        working-directory: server
+        run: npm run build:pr
+
+      - name: Build (app)
+        working-directory: app
+        run: npm run build:pr
+
+      - name: Require clean working directory
+        run: |
+          if ! git diff --exit-code; then
+            echo "Working tree dirty at end of job."
+            exit 1
+          fi
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        package-name:
+          - app
+          - server
+
+    defaults:
+      run:
+        working-directory: ${{ matrix.package-name }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+          cache-dependency-path: ./${{ matrix.package-name }}/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
