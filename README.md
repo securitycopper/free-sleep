@@ -15,6 +15,17 @@
 ---
 
 ## 🛠️ [Installation Instructions](./INSTALLATION.md) 🛠
+## 👉 [Home Assistant MQTT Integration](./docs/HOME_ASSISTANT_MQTT.md)
+
+--- 
+
+## Quick resume / project operations
+
+- **Pod 3 SD card imaging workflow**: [scripts/pod3_sd_card_scripts/full_patch_workflow.md](./scripts/pod3_sd_card_scripts/full_patch_workflow.md)
+- **Update a running pod from upstream (`throwaway31265/free-sleep`)**:
+  - `sudo sh /home/dac/free-sleep/scripts/update.sh`
+- **Sync this fork with upstream in your local repo**:
+  - `sh scripts/sync_from_upstream.sh`
 
 --- 
 
@@ -52,6 +63,7 @@ That said, you can fully reset the firmware and return the Pod to its original s
 - Allows complete control of device WITHOUT requiring internet access. If you lose internet, your pod WILL NOT turn off, it will continue working! You can completely block WAN internet access if you'd like too. (I blocked all internet access from my pod on my router...)
 - WARNING: This will bypass blocked devices, please use responsibly
 - Dynamic temperature control with real-time updates
+- Optional Home Assistant integration through MQTT bridge
 - Schedule management: 
   - Set power on/off times 
   - Schedule temperature adjustments
@@ -153,5 +165,3 @@ This project is licensed under the MIT License. See the `LICENSE.md` file for de
 ![Settings](docs/settings.PNG)
 ![Settings](docs/settings_2.PNG)
 ![Support](docs/support.PNG)
-
-

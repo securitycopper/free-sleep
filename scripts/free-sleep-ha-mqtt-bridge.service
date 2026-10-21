@@ -1,0 +1,20 @@
+[Unit]
+Description=Free Sleep Home Assistant MQTT Bridge
+After=network-online.target free-sleep.service
+Wants=network-online.target free-sleep.service
+
+[Service]
+Type=simple
+User=dac
+Group=dac
+EnvironmentFile=-/persistent/free-sleep-data/ha-mqtt-bridge.env
+WorkingDirectory=/home/dac/free-sleep
+ExecStart=/bin/bash -lc 'if [ -x /home/dac/venv/bin/python ]; then exec /home/dac/venv/bin/python /home/dac/free-sleep/scripts/home_assistant_mqtt_bridge.py; else exec python3 /home/dac/free-sleep/scripts/home_assistant_mqtt_bridge.py; fi'
+Restart=always
+RestartSec=5
+StandardOutput=append:/persistent/free-sleep-data/logs/ha-mqtt-bridge.log
+StandardError=append:/persistent/free-sleep-data/logs/ha-mqtt-bridge.log
+
+[Install]
+WantedBy=multi-user.target
+

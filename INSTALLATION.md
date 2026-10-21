@@ -275,3 +275,33 @@ sh /home/dac/free-sleep/scripts/unblock_internet_access.sh
 - `fs-reset` - Wipes free-sleep data and does a fresh install (can fix corrupted DB or issues switching from beta branch to main branch (requires confirmation in a prompt before executing)
 - `fs-update` - Manually runs the update script
 - `fs-dev-server` - Run express server with nodemon (for devs)
+
+---
+
+## 20. Update free-sleep from upstream
+This updates your pod using `throwaway31265/free-sleep` (default branch `main`) and restores from backup if update fails.
+
+```bash
+sudo sh /home/dac/free-sleep/scripts/update.sh
+```
+
+Optional: update from a different upstream branch:
+
+```bash
+sudo UPSTREAM_BRANCH=<branch-name> sh /home/dac/free-sleep/scripts/update.sh
+```
+
+---
+
+## 21. (Optional) Home Assistant integration through MQTT
+If you want Home Assistant control for left/right power and temperature, use the included bridge:
+
+```bash
+sudo sh /home/dac/free-sleep/scripts/install_home_assistant_mqtt_bridge.sh
+```
+
+Then configure:
+
+`/persistent/free-sleep-data/ha-mqtt-bridge.env`
+
+Full guide: [HOME_ASSISTANT_MQTT.md](./docs/HOME_ASSISTANT_MQTT.md)
